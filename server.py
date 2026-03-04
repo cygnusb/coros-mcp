@@ -58,7 +58,7 @@ async def authenticate_coros(
             "authenticated": True,
             "user_id": auth.user_id,
             "region": auth.region,
-            "message": f"Token stored at {coros_api.AUTH_FILE}",
+            "message": "Token stored securely (keyring or encrypted file)",
         }
     except Exception as exc:
         return {

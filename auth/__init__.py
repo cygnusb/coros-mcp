@@ -1,0 +1,1 @@
+"""Coros MCP credential storage."""

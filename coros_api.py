@@ -14,6 +14,7 @@ from typing import Optional
 
 import httpx
 
+from auth.storage import get_token, store_token
 from models import DailyRecord, HRVRecord, SleepPhases, SleepRecord, StoredAuth
 
 # ---------------------------------------------------------------------------
@@ -35,25 +36,23 @@ BASE_URLS = {
     "us": "https://teamapi.coros.com",
 }
 
-AUTH_FILE = Path.home() / ".config" / "coros-mcp" / "auth.json"
 TOKEN_TTL_MS = 24 * 60 * 60 * 1000  # 24 hours in milliseconds
 
 
 # ---------------------------------------------------------------------------
-# Token storage
+# Token storage  (keyring → encrypted file, managed by auth.storage)
 # ---------------------------------------------------------------------------
 
 def _save_auth(auth: StoredAuth) -> None:
-    AUTH_FILE.parent.mkdir(parents=True, exist_ok=True)
-    AUTH_FILE.write_text(auth.model_dump_json())
-    AUTH_FILE.chmod(0o600)
+    store_token(auth.model_dump_json())
 
 
 def _load_auth() -> Optional[StoredAuth]:
-    if not AUTH_FILE.exists():
+    result = get_token()
+    if not result.success or not result.token:
         return None
     try:
-        data = json.loads(AUTH_FILE.read_text())
+        data = json.loads(result.token)
         return StoredAuth(**data)
     except Exception:
         return None
