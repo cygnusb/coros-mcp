@@ -82,7 +82,7 @@ async def login(email: str, password: str, region: str = "eu") -> StoredAuth:
         "accountType": 2,
         "pwd": _md5(password),
     }
-    async with httpx.AsyncClient() as client:
+    async with httpx.AsyncClient(timeout=30) as client:
         resp = await client.post(url, json=payload, headers={"Content-Type": "application/json"})
         resp.raise_for_status()
         body = resp.json()
@@ -133,7 +133,7 @@ async def fetch_hrv(auth: StoredAuth) -> list[HRVRecord]:
     There is no date-range parameter — the dashboard always returns recent data.
     """
     url = _base_url(auth.region) + ENDPOINTS["dashboard"]
-    async with httpx.AsyncClient() as client:
+    async with httpx.AsyncClient(timeout=30) as client:
         resp = await client.get(url, headers=_auth_headers(auth))
         resp.raise_for_status()
         body = resp.json()
@@ -185,7 +185,7 @@ async def fetch_sleep(auth: StoredAuth, start_day: str, end_day: str) -> list[Sl
         "startDay": start_day,
         "endDay": end_day,
     }
-    async with httpx.AsyncClient() as client:
+    async with httpx.AsyncClient(timeout=30) as client:
         resp = await client.get(url, params=params, headers=_auth_headers(auth))
         resp.raise_for_status()
         body = resp.json()
