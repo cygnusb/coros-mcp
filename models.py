@@ -33,7 +33,18 @@ class DailyRecord(BaseModel):
     interval_list: Optional[list[int]] = None
     rhr: Optional[int] = None                      # resting heart rate (bpm)
     training_load: Optional[int] = None
+    training_load_ratio: Optional[float] = None    # acute/chronic ratio
     tired_rate: Optional[float] = None
+    ati: Optional[float] = None                    # acute training index
+    cti: Optional[float] = None                    # chronic training index
+    performance: Optional[int] = None              # performance index (-1 = no data)
+    distance: Optional[float] = None               # daily distance (m)
+    duration: Optional[int] = None                 # daily duration (s)
+    vo2max: Optional[int] = None                   # only from /analyse/query
+    lthr: Optional[int] = None                     # lactate threshold HR (bpm)
+    ltsp: Optional[int] = None                     # lactate threshold pace (s/km)
+    stamina_level: Optional[float] = None          # base fitness
+    stamina_level_7d: Optional[float] = None       # 7-day fitness trend
 
 
 class StoredAuth(BaseModel):

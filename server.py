@@ -140,11 +140,11 @@ async def get_hrv_data() -> dict:
 
 
 # ---------------------------------------------------------------------------
-# Tool: get_hrv_history
+# Tool: get_daily_metrics
 # ---------------------------------------------------------------------------
 
 @mcp.tool()
-async def get_hrv_history(weeks: int = 4) -> dict:
+async def get_daily_metrics(weeks: int = 4) -> dict:
     """
     Retrieve nightly HRV and daily metrics from Coros for a configurable
     time range (up to 24 weeks).
@@ -164,10 +164,19 @@ async def get_hrv_history(weeks: int = 4) -> dict:
       - date: YYYYMMDD
       - avg_sleep_hrv: average nightly RMSSD in ms
       - baseline: rolling baseline RMSSD
-      - interval_list: percentile band boundaries
       - rhr: resting heart rate (bpm)
       - training_load: daily training load
+      - training_load_ratio: acute/chronic training load ratio
       - tired_rate: fatigue rate
+      - ati: acute training index
+      - cti: chronic training index
+      - distance: daily distance in meters
+      - duration: daily duration in seconds
+      - vo2max: VO2 Max (only available for last ~28 days)
+      - lthr: lactate threshold heart rate (bpm)
+      - ltsp: lactate threshold pace (s/km)
+      - stamina_level: base fitness level
+      - stamina_level_7d: 7-day fitness trend
     """
     auth = coros_api.get_stored_auth()
     if auth is None:

@@ -23,6 +23,7 @@ from models import DailyRecord, HRVRecord, SleepPhases, SleepRecord, StoredAuth
 ENDPOINTS = {
     "login": "/account/login",
     "dashboard": "/dashboard/query",        # contains sleepHrvData (last 7 days)
+    "analyse": "/analyse/query",            # summary + t7dayList (28 days, has VO2max/fitness)
     "analyse_detail": "/analyse/dayDetail/query",  # daily metrics with date range (up to 24 weeks)
     "sleep": "/sleep/query",                # NOT available on Training Hub API
 }
@@ -172,39 +173,83 @@ async def fetch_hrv(auth: StoredAuth) -> list[HRVRecord]:
 # Daily analysis data  (/analyse/dayDetail/query — up to 24 weeks)
 # ---------------------------------------------------------------------------
 
+def _parse_daily_record(item: dict) -> DailyRecord:
+    """Parse a single day record from either endpoint."""
+    return DailyRecord(
+        date=str(item.get("happenDay", "")),
+        avg_sleep_hrv=item.get("avgSleepHrv"),
+        baseline=item.get("sleepHrvBase"),
+        interval_list=item.get("sleepHrvIntervalList"),
+        rhr=item.get("rhr"),
+        training_load=item.get("trainingLoad"),
+        training_load_ratio=item.get("trainingLoadRatio"),
+        tired_rate=item.get("tiredRateNew"),
+        ati=item.get("ati"),
+        cti=item.get("cti"),
+        performance=item.get("performance"),
+        distance=item.get("distance"),
+        duration=item.get("duration"),
+        vo2max=item.get("vo2max"),
+        lthr=item.get("lthr"),
+        ltsp=item.get("ltsp"),
+        stamina_level=item.get("staminaLevel"),
+        stamina_level_7d=item.get("staminaLevel7d"),
+    )
+
+
 async def fetch_daily_records(
     auth: StoredAuth, start_day: str, end_day: str
 ) -> list[DailyRecord]:
     """
-    Fetch daily metrics (HRV, RHR, training load, etc.) for a date range.
+    Fetch daily metrics (HRV, RHR, training load, VO2max, etc.) for a date range.
 
-    Uses the /analyse/dayDetail/query endpoint which supports up to ~24 weeks.
+    Merges data from two endpoints:
+    - /analyse/dayDetail/query: supports up to ~24 weeks (no VO2max/fitness)
+    - /analyse/query: last ~28 days with VO2max, LTHR, stamina (merged in)
     """
-    url = _base_url(auth.region) + ENDPOINTS["analyse_detail"]
-    params = {"startDay": start_day, "endDay": end_day}
-    async with httpx.AsyncClient(timeout=30) as client:
-        resp = await client.get(url, params=params, headers=_auth_headers(auth))
-        resp.raise_for_status()
-        body = resp.json()
+    headers = _auth_headers(auth)
+    base = _base_url(auth.region)
 
-    if body.get("result") != "0000":
+    async with httpx.AsyncClient(timeout=30) as client:
+        detail_resp = await client.get(
+            base + ENDPOINTS["analyse_detail"],
+            params={"startDay": start_day, "endDay": end_day},
+            headers=headers,
+        )
+        detail_resp.raise_for_status()
+        detail_body = detail_resp.json()
+
+        analyse_resp = await client.get(
+            base + ENDPOINTS["analyse"],
+            headers=headers,
+        )
+        analyse_resp.raise_for_status()
+        analyse_body = analyse_resp.json()
+
+    if detail_body.get("result") != "0000":
         raise ValueError(
-            f"Coros analyse API error: {body.get('message', 'unknown error')}"
+            f"Coros analyse API error: {detail_body.get('message', 'unknown error')}"
         )
 
-    records: list[DailyRecord] = []
-    for item in body.get("data", {}).get("dayList", []):
-        records.append(DailyRecord(
-            date=str(item.get("happenDay", "")),
-            avg_sleep_hrv=item.get("avgSleepHrv"),
-            baseline=item.get("sleepHrvBase"),
-            interval_list=item.get("sleepHrvIntervalList"),
-            rhr=item.get("rhr"),
-            training_load=item.get("trainingLoad"),
-            tired_rate=item.get("tiredRateNew"),
-        ))
+    # Build records from dayDetail (long range)
+    records_by_date: dict[str, DailyRecord] = {}
+    for item in detail_body.get("data", {}).get("dayList", []):
+        rec = _parse_daily_record(item)
+        records_by_date[rec.date] = rec
 
-    return sorted(records, key=lambda r: r.date)
+    # Merge VO2max/fitness fields from t7dayList (last ~28 days)
+    if analyse_body.get("result") == "0000":
+        for item in analyse_body.get("data", {}).get("t7dayList", []):
+            date = str(item.get("happenDay", ""))
+            if date in records_by_date:
+                rec = records_by_date[date]
+                rec.vo2max = item.get("vo2max") or rec.vo2max
+                rec.lthr = item.get("lthr") or rec.lthr
+                rec.ltsp = item.get("ltsp") or rec.ltsp
+                rec.stamina_level = item.get("staminaLevel") or rec.stamina_level
+                rec.stamina_level_7d = item.get("staminaLevel7d") or rec.stamina_level_7d
+
+    return sorted(records_by_date.values(), key=lambda r: r.date)
 
 
 # ---------------------------------------------------------------------------
