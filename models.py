@@ -13,17 +13,17 @@ class SleepRecord(BaseModel):
     date: str
     total_duration_minutes: Optional[int] = None
     phases: Optional[SleepPhases] = None
-    sleep_start: Optional[str] = None  # ISO time string, e.g. "22:30"
-    sleep_end: Optional[str] = None    # ISO time string, e.g. "06:45"
-    quality_score: Optional[int] = None  # 0-100 if provided by API
+    sleep_start: Optional[str] = None
+    sleep_end: Optional[str] = None
+    quality_score: Optional[int] = None
 
 
 class HRVRecord(BaseModel):
     date: str
-    rmssd_avg: Optional[float] = None    # Nacht-Durchschnitt RMSSD (ms)
-    hrv_index: Optional[int] = None      # Coros HRV Index 0-100
-    rmssd_min: Optional[float] = None
-    rmssd_max: Optional[float] = None
+    avg_sleep_hrv: Optional[float] = None    # Nacht-Durchschnitt RMSSD (ms)
+    baseline: Optional[float] = None          # sleepHrvBase — rolling baseline
+    standard_deviation: Optional[float] = None  # sleepHrvSd
+    interval_list: Optional[list[int]] = None   # sleepHrvIntervalList — percentile bands
 
 
 class StoredAuth(BaseModel):

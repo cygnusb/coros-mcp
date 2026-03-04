@@ -2,13 +2,12 @@
 Coros Training Hub API client.
 
 Auth mechanism: MD5-hashed password + accessToken header.
-Sleep/HRV endpoints are placeholders — confirm via Proxyman SSL decryption.
-See docs/discover-endpoints.md for instructions.
+HRV data comes from /dashboard/query (last 7 days of nightly RMSSD).
+Sleep phase data is NOT available through the Training Hub web API.
 """
 
 import hashlib
 import json
-import os
 import time
 from pathlib import Path
 from typing import Optional
@@ -18,18 +17,20 @@ import httpx
 from models import HRVRecord, SleepPhases, SleepRecord, StoredAuth
 
 # ---------------------------------------------------------------------------
-# Endpoint constants — update after Proxyman capture
+# Endpoint constants
 # ---------------------------------------------------------------------------
 
 ENDPOINTS = {
     "login": "/account/login",
-    "sleep": "/sleep/query",    # TODO: confirm via Proxyman with SSL decryption
-    "hrv": "/hrv/query",        # TODO: confirm via Proxyman with SSL decryption
+    "dashboard": "/dashboard/query",   # contains sleepHrvData (last 7 days)
+    "sleep": "/sleep/query",           # NOT available on Training Hub API
 }
 
+# Login works on teamapi.coros.com but tokens are only valid on the
+# region-specific API host.  Always use the regional URL for all calls.
 BASE_URLS = {
-    "eu": "https://teamapi.coros.com",
-    "us": "https://us.teamapi.coros.com",
+    "eu": "https://teameuapi.coros.com",
+    "us": "https://teamapi.coros.com",
 }
 
 AUTH_FILE = Path.home() / ".config" / "coros-mcp" / "auth.json"
@@ -86,7 +87,6 @@ async def login(email: str, password: str, region: str = "eu") -> StoredAuth:
         resp.raise_for_status()
         body = resp.json()
 
-    # Coros wraps response in {"result": "0000", "message": "OK", "data": {...}}
     if body.get("result") != "0000":
         raise ValueError(f"Coros login failed: {body.get('message', 'unknown error')}")
 
@@ -116,25 +116,68 @@ def get_stored_auth() -> Optional[StoredAuth]:
 def _auth_headers(auth: StoredAuth) -> dict:
     return {
         "Content-Type": "application/json",
-        "accesstoken": auth.access_token,
+        "accessToken": auth.access_token,
         "yfheader": json.dumps({"userId": auth.user_id}),
     }
 
 
 # ---------------------------------------------------------------------------
-# Sleep data
+# HRV data  (confirmed: /dashboard/query → data.summaryInfo.sleepHrvData)
+# ---------------------------------------------------------------------------
+
+async def fetch_hrv(auth: StoredAuth) -> list[HRVRecord]:
+    """
+    Fetch nightly HRV data from the Coros dashboard endpoint.
+
+    Returns the last ~7 days of data (whatever the API provides).
+    There is no date-range parameter — the dashboard always returns recent data.
+    """
+    url = _base_url(auth.region) + ENDPOINTS["dashboard"]
+    async with httpx.AsyncClient() as client:
+        resp = await client.get(url, headers=_auth_headers(auth))
+        resp.raise_for_status()
+        body = resp.json()
+
+    if body.get("result") != "0000":
+        raise ValueError(f"Coros dashboard API error: {body.get('message', 'unknown error')}")
+
+    hrv_data = body.get("data", {}).get("summaryInfo", {}).get("sleepHrvData", {})
+    records: list[HRVRecord] = []
+
+    for item in hrv_data.get("sleepHrvList", []):
+        records.append(HRVRecord(
+            date=str(item.get("happenDay", "")),
+            avg_sleep_hrv=item.get("avgSleepHrv"),
+            baseline=item.get("sleepHrvBase"),
+            standard_deviation=item.get("sleepHrvSd"),
+            interval_list=item.get("sleepHrvIntervalList"),
+        ))
+
+    # Also include today's summary if available and not already in the list
+    today_day = hrv_data.get("happenDay")
+    if today_day and not any(r.date == str(today_day) for r in records):
+        records.append(HRVRecord(
+            date=str(today_day),
+            avg_sleep_hrv=hrv_data.get("avgSleepHrv"),
+            baseline=hrv_data.get("sleepHrvBase"),
+            standard_deviation=hrv_data.get("sleepHrvSd"),
+            interval_list=hrv_data.get("sleepHrvAllIntervalList"),
+        ))
+
+    return sorted(records, key=lambda r: r.date)
+
+
+# ---------------------------------------------------------------------------
+# Sleep data  (NOT available through Training Hub web API)
 # ---------------------------------------------------------------------------
 
 async def fetch_sleep(auth: StoredAuth, start_day: str, end_day: str) -> list[SleepRecord]:
     """
     Fetch sleep data for a date range.
 
-    Parameters
-    ----------
-    start_day, end_day : str
-        Dates in YYYYMMDD format.
-
-    NOTE: Endpoint is a placeholder — confirm path via Proxyman.
+    WARNING: Sleep phase data (deep/light/REM/awake) is NOT available through
+    the Coros Training Hub web API.  This endpoint is a placeholder for when
+    the correct mobile-app API endpoint is discovered.
     """
     url = _base_url(auth.region) + ENDPOINTS["sleep"]
     params = {
@@ -152,73 +195,18 @@ async def fetch_sleep(auth: StoredAuth, start_day: str, end_day: str) -> list[Sl
 
     records: list[SleepRecord] = []
     for item in body.get("data", {}).get("list", []):
-        records.append(_parse_sleep_item(item))
+        phases = SleepPhases(
+            deep_minutes=item.get("deepSleepMinutes"),
+            light_minutes=item.get("lightSleepMinutes"),
+            rem_minutes=item.get("remSleepMinutes"),
+            awake_minutes=item.get("awakeSleepMinutes"),
+        )
+        records.append(SleepRecord(
+            date=str(item.get("date", "")),
+            total_duration_minutes=item.get("totalSleepMinutes"),
+            phases=phases,
+            sleep_start=item.get("sleepStartTime"),
+            sleep_end=item.get("sleepEndTime"),
+            quality_score=item.get("sleepScore"),
+        ))
     return records
-
-
-def _parse_sleep_item(item: dict) -> SleepRecord:
-    """
-    Parse a single sleep record from API response.
-
-    Field mapping is speculative — update after confirming endpoint.
-    Common Coros field names based on observed API patterns.
-    """
-    phases = SleepPhases(
-        deep_minutes=item.get("deepSleepMinutes") or item.get("deepSleep"),
-        light_minutes=item.get("lightSleepMinutes") or item.get("lightSleep"),
-        rem_minutes=item.get("remSleepMinutes") or item.get("remSleep"),
-        awake_minutes=item.get("awakeSleepMinutes") or item.get("awakeSleep"),
-    )
-    return SleepRecord(
-        date=str(item.get("date", "")),
-        total_duration_minutes=item.get("totalSleepMinutes") or item.get("totalSleep"),
-        phases=phases,
-        sleep_start=item.get("sleepStartTime") or item.get("startTime"),
-        sleep_end=item.get("sleepEndTime") or item.get("endTime"),
-        quality_score=item.get("sleepScore") or item.get("score"),
-    )
-
-
-# ---------------------------------------------------------------------------
-# HRV data
-# ---------------------------------------------------------------------------
-
-async def fetch_hrv(auth: StoredAuth, start_day: str, end_day: str) -> list[HRVRecord]:
-    """
-    Fetch HRV data for a date range.
-
-    NOTE: Endpoint is a placeholder — confirm path via Proxyman.
-    """
-    url = _base_url(auth.region) + ENDPOINTS["hrv"]
-    params = {
-        "userId": auth.user_id,
-        "startDay": start_day,
-        "endDay": end_day,
-    }
-    async with httpx.AsyncClient() as client:
-        resp = await client.get(url, params=params, headers=_auth_headers(auth))
-        resp.raise_for_status()
-        body = resp.json()
-
-    if body.get("result") != "0000":
-        raise ValueError(f"Coros HRV API error: {body.get('message', 'unknown error')}")
-
-    records: list[HRVRecord] = []
-    for item in body.get("data", {}).get("list", []):
-        records.append(_parse_hrv_item(item))
-    return records
-
-
-def _parse_hrv_item(item: dict) -> HRVRecord:
-    """
-    Parse a single HRV record from API response.
-
-    Field mapping is speculative — update after confirming endpoint.
-    """
-    return HRVRecord(
-        date=str(item.get("date", "")),
-        rmssd_avg=item.get("rmssdAvg") or item.get("avgRmssd") or item.get("nightAvg"),
-        hrv_index=item.get("hrvIndex") or item.get("score"),
-        rmssd_min=item.get("rmssdMin") or item.get("minRmssd"),
-        rmssd_max=item.get("rmssdMax") or item.get("maxRmssd"),
-    )
