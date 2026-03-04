@@ -140,6 +140,60 @@ async def get_hrv_data() -> dict:
 
 
 # ---------------------------------------------------------------------------
+# Tool: get_hrv_history
+# ---------------------------------------------------------------------------
+
+@mcp.tool()
+async def get_hrv_history(weeks: int = 4) -> dict:
+    """
+    Retrieve nightly HRV and daily metrics from Coros for a configurable
+    time range (up to 24 weeks).
+
+    Uses the /analyse/dayDetail/query endpoint which returns daily records
+    including HRV, resting heart rate, training load, and fatigue rate.
+
+    Parameters
+    ----------
+    weeks : int
+        Number of weeks to fetch (1–24). Default: 4.
+
+    Returns
+    -------
+    dict with keys: records (list of daily records), count, date_range
+    Each record contains:
+      - date: YYYYMMDD
+      - avg_sleep_hrv: average nightly RMSSD in ms
+      - baseline: rolling baseline RMSSD
+      - interval_list: percentile band boundaries
+      - rhr: resting heart rate (bpm)
+      - training_load: daily training load
+      - tired_rate: fatigue rate
+    """
+    auth = coros_api.get_stored_auth()
+    if auth is None:
+        return {
+            "error": "Not authenticated. Call authenticate_coros first.",
+            "records": [],
+        }
+
+    weeks = max(1, min(weeks, 24))
+    end_dt = datetime.now()
+    start_dt = end_dt - timedelta(weeks=weeks)
+    start_day = start_dt.strftime("%Y%m%d")
+    end_day = end_dt.strftime("%Y%m%d")
+
+    try:
+        records = await coros_api.fetch_daily_records(auth, start_day, end_day)
+        return {
+            "records": [r.model_dump() for r in records],
+            "count": len(records),
+            "date_range": f"{start_day} – {end_day}",
+        }
+    except Exception as exc:
+        return {"error": str(exc), "records": []}
+
+
+# ---------------------------------------------------------------------------
 # Tool: get_sleep_data
 # ---------------------------------------------------------------------------
 

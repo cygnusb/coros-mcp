@@ -14,7 +14,7 @@ from typing import Optional
 
 import httpx
 
-from models import HRVRecord, SleepPhases, SleepRecord, StoredAuth
+from models import DailyRecord, HRVRecord, SleepPhases, SleepRecord, StoredAuth
 
 # ---------------------------------------------------------------------------
 # Endpoint constants
@@ -22,8 +22,9 @@ from models import HRVRecord, SleepPhases, SleepRecord, StoredAuth
 
 ENDPOINTS = {
     "login": "/account/login",
-    "dashboard": "/dashboard/query",   # contains sleepHrvData (last 7 days)
-    "sleep": "/sleep/query",           # NOT available on Training Hub API
+    "dashboard": "/dashboard/query",        # contains sleepHrvData (last 7 days)
+    "analyse_detail": "/analyse/dayDetail/query",  # daily metrics with date range (up to 24 weeks)
+    "sleep": "/sleep/query",                # NOT available on Training Hub API
 }
 
 # Login works on teamapi.coros.com but tokens are only valid on the
@@ -162,6 +163,45 @@ async def fetch_hrv(auth: StoredAuth) -> list[HRVRecord]:
             baseline=hrv_data.get("sleepHrvBase"),
             standard_deviation=hrv_data.get("sleepHrvSd"),
             interval_list=hrv_data.get("sleepHrvAllIntervalList"),
+        ))
+
+    return sorted(records, key=lambda r: r.date)
+
+
+# ---------------------------------------------------------------------------
+# Daily analysis data  (/analyse/dayDetail/query — up to 24 weeks)
+# ---------------------------------------------------------------------------
+
+async def fetch_daily_records(
+    auth: StoredAuth, start_day: str, end_day: str
+) -> list[DailyRecord]:
+    """
+    Fetch daily metrics (HRV, RHR, training load, etc.) for a date range.
+
+    Uses the /analyse/dayDetail/query endpoint which supports up to ~24 weeks.
+    """
+    url = _base_url(auth.region) + ENDPOINTS["analyse_detail"]
+    params = {"startDay": start_day, "endDay": end_day}
+    async with httpx.AsyncClient(timeout=30) as client:
+        resp = await client.get(url, params=params, headers=_auth_headers(auth))
+        resp.raise_for_status()
+        body = resp.json()
+
+    if body.get("result") != "0000":
+        raise ValueError(
+            f"Coros analyse API error: {body.get('message', 'unknown error')}"
+        )
+
+    records: list[DailyRecord] = []
+    for item in body.get("data", {}).get("dayList", []):
+        records.append(DailyRecord(
+            date=str(item.get("happenDay", "")),
+            avg_sleep_hrv=item.get("avgSleepHrv"),
+            baseline=item.get("sleepHrvBase"),
+            interval_list=item.get("sleepHrvIntervalList"),
+            rhr=item.get("rhr"),
+            training_load=item.get("trainingLoad"),
+            tired_rate=item.get("tiredRateNew"),
         ))
 
     return sorted(records, key=lambda r: r.date)

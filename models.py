@@ -26,6 +26,16 @@ class HRVRecord(BaseModel):
     interval_list: Optional[list[int]] = None   # sleepHrvIntervalList — percentile bands
 
 
+class DailyRecord(BaseModel):
+    date: str
+    avg_sleep_hrv: Optional[float] = None
+    baseline: Optional[float] = None
+    interval_list: Optional[list[int]] = None
+    rhr: Optional[int] = None                      # resting heart rate (bpm)
+    training_load: Optional[int] = None
+    tired_rate: Optional[float] = None
+
+
 class StoredAuth(BaseModel):
     access_token: str
     user_id: str
