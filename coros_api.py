@@ -106,11 +106,11 @@ def _mobile_encrypt(plaintext: str, app_key: str) -> str:
     return base64.b64encode(cipher.encrypt(padded)).decode("ascii")
 
 
-async def _mobile_login(email: str, password: str, region: str = "eu") -> tuple[str, dict, str]:
+async def _mobile_login(email: str, password: str, region: str = "eu") -> tuple[str, dict]:
     """
     Authenticate against the Coros mobile API with encrypted credentials.
 
-    Returns (access_token, login_payload_for_replay, yfheader).
+    Returns (access_token, login_payload_for_replay).
     The login_payload can be replayed to refresh the token without re-entering credentials.
     """
     mobile_base = MOBILE_BASE_URLS.get(region, MOBILE_BASE_URLS["eu"])
@@ -139,7 +139,7 @@ async def _mobile_login(email: str, password: str, region: str = "eu") -> tuple[
     if not token:
         raise ValueError("No accessToken in Coros mobile login response")
 
-    return token, payload, ""
+    return token, payload
 
 
 # ---------------------------------------------------------------------------
@@ -183,9 +183,8 @@ async def login(email: str, password: str, region: str = "eu") -> StoredAuth:
     # Uses AES-encrypted credentials (key reverse-engineered from libencrypt-lib.so)
     mobile_token = None
     mobile_payload = None
-    mobile_yfheader = None
     try:
-        mobile_token, mobile_payload, mobile_yfheader = await _mobile_login(email, password, region)
+        mobile_token, mobile_payload = await _mobile_login(email, password, region)
     except Exception:
         pass  # mobile login is best-effort; sleep data will fail gracefully
 
@@ -196,7 +195,6 @@ async def login(email: str, password: str, region: str = "eu") -> StoredAuth:
         timestamp=int(time.time() * 1000),
         mobile_access_token=mobile_token,
         mobile_login_payload=mobile_payload,
-        mobile_yfheader=mobile_yfheader,
     )
     _save_auth(auth)
     return auth
@@ -573,9 +571,9 @@ async def _refresh_mobile_token(auth: StoredAuth) -> bool:
     """
     Refresh the mobile API token by replaying the stored login payload.
 
-    The stored payload contains AES-encrypted credentials (generated during
-    coros-mcp auth or extracted from a mitmproxy dump).  The server accepts
-    replay of the same encrypted payload — no nonce or anti-replay protection.
+    The stored payload contains AES-encrypted credentials generated during
+    coros-mcp auth.  The server accepts replay of the same encrypted payload
+    — no nonce or anti-replay protection.
 
     Returns True and updates auth.mobile_access_token in-place on success.
     """
@@ -590,9 +588,6 @@ async def _refresh_mobile_token(auth: StoredAuth) -> bool:
         "user-agent": "okhttp/4.12.0",
         "request-time": str(int(time.time() * 1000)),
     }
-    if auth.mobile_yfheader:
-        headers["yfheader"] = auth.mobile_yfheader
-
     try:
         async with httpx.AsyncClient(timeout=30) as client:
             resp = await client.post(url, json=auth.mobile_login_payload, headers=headers)
@@ -630,8 +625,7 @@ async def fetch_sleep(auth: StoredAuth, start_day: str, end_day: str) -> list[Sl
     if not auth.mobile_access_token:
         if not await _refresh_mobile_token(auth):
             raise ValueError(
-                "No mobile API token. Run 'coros-mcp set-mobile-token' or "
-                "'coros-mcp extract-from-dump <file>' to enable sleep data."
+                "No mobile API token available. Run 'coros-mcp auth' to re-authenticate."
             )
 
     mobile_base = MOBILE_BASE_URLS.get(auth.region, MOBILE_BASE_URLS["eu"])
