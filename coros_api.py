@@ -21,6 +21,8 @@ from models import ActivitySummary, DailyRecord, HRVRecord, SleepPhases, SleepRe
 # Endpoint constants
 # ---------------------------------------------------------------------------
 
+MOBILE_LOGIN_ENDPOINT = "/coros/user/login"
+
 ENDPOINTS = {
     "login": "/account/login",
     "dashboard": "/dashboard/query",        # contains sleepHrvData (last 7 days)
@@ -501,6 +503,55 @@ async def create_workout(
 
 
 # ---------------------------------------------------------------------------
+# Mobile token auto-refresh
+# ---------------------------------------------------------------------------
+
+async def _refresh_mobile_token(auth: StoredAuth) -> bool:
+    """
+    Replay the captured mobile login request to obtain a fresh token.
+
+    The Coros mobile API uses encrypted credentials (AES, device-specific key).
+    Since we cannot derive the encryption key from the plaintext credentials,
+    we replay the exact encrypted payload captured via mitmproxy.  The server
+    accepts replays — no nonce or anti-replay protection in the body.
+
+    Returns True and updates auth.mobile_access_token in-place on success.
+    """
+    if not auth.mobile_login_payload:
+        return False
+
+    mobile_base = MOBILE_BASE_URLS.get(auth.region, MOBILE_BASE_URLS["eu"])
+    url = mobile_base + MOBILE_LOGIN_ENDPOINT
+    headers: dict[str, str] = {
+        "content-type": "application/json",
+        "accept-encoding": "gzip",
+        "user-agent": "okhttp/4.12.0",
+        "request-time": str(int(time.time() * 1000)),
+    }
+    if auth.mobile_yfheader:
+        headers["yfheader"] = auth.mobile_yfheader
+
+    try:
+        async with httpx.AsyncClient(timeout=30) as client:
+            resp = await client.post(url, json=auth.mobile_login_payload, headers=headers)
+            resp.raise_for_status()
+            body = resp.json()
+
+        if body.get("result") != "0000":
+            return False
+
+        token = body.get("data", {}).get("accessToken")
+        if not token:
+            return False
+
+        auth.mobile_access_token = token
+        _save_auth(auth)
+        return True
+    except Exception:
+        return False
+
+
+# ---------------------------------------------------------------------------
 # Sleep data  (mobile API: apieu.coros.com/coros/data/statistic/daily)
 # ---------------------------------------------------------------------------
 
@@ -514,16 +565,16 @@ async def fetch_sleep(auth: StoredAuth, start_day: str, end_day: str) -> list[Sl
 
     start_day / end_day: YYYYMMDD strings.
     """
-    mobile_token = auth.mobile_access_token
-    if not mobile_token:
-        raise ValueError(
-            "No mobile API token stored. Please re-authenticate with authenticate_coros "
-            "to obtain a token valid for sleep data."
-        )
+    if not auth.mobile_access_token:
+        if not await _refresh_mobile_token(auth):
+            raise ValueError(
+                "No mobile API token. Run 'coros-mcp set-mobile-token' or "
+                "'coros-mcp extract-from-dump <file>' to enable sleep data."
+            )
 
     mobile_base = MOBILE_BASE_URLS.get(auth.region, MOBILE_BASE_URLS["eu"])
     url = mobile_base + ENDPOINTS["sleep"]
-    payload = {
+    sleep_payload = {
         "allDeviceSleep": 1,
         "dataType": [5],
         "dataVersion": 0,
@@ -531,15 +582,23 @@ async def fetch_sleep(auth: StoredAuth, start_day: str, end_day: str) -> list[Sl
         "endTime": int(end_day),
         "statisticType": 1,
     }
-    async with httpx.AsyncClient(timeout=30) as client:
-        resp = await client.post(
-            url,
-            params={"accessToken": mobile_token},
-            json=payload,
-            headers={"Content-Type": "application/json", "accesstoken": mobile_token},
-        )
-        resp.raise_for_status()
-        body = resp.json()
+
+    async def _do_request(token: str) -> dict:
+        async with httpx.AsyncClient(timeout=30) as client:
+            resp = await client.post(
+                url,
+                params={"accessToken": token},
+                json=sleep_payload,
+                headers={"Content-Type": "application/json", "accesstoken": token},
+            )
+            resp.raise_for_status()
+            return resp.json()
+
+    body = await _do_request(auth.mobile_access_token)
+
+    if body.get("result") == "1019":  # token expired — try auto-refresh once
+        if await _refresh_mobile_token(auth):
+            body = await _do_request(auth.mobile_access_token)
 
     if body.get("result") != "0000":
         raise ValueError(f"Coros sleep API error: {body.get('message', 'unknown error')}")

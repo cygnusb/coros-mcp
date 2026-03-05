@@ -1,8 +1,8 @@
 # Getting a Mobile API Token for Sleep Data
 
 Sleep data is served by the Coros mobile API (`apieu.coros.com`), which uses a separate
-authentication token from the Training Hub web API. Until automatic mobile login is
-implemented, you need to capture this token once using a proxy tool.
+authentication token from the Training Hub web API. You need to capture this token once
+using a proxy tool — after that, the server refreshes it automatically.
 
 ## What You Need
 
@@ -74,7 +74,24 @@ The login response contains:
 }
 ```
 
-### 7. Store the token
+### 7. Store the token and enable auto-refresh
+
+Save the dump file during capture (recommended):
+
+```bash
+mitmdump -w coros_login.dump
+```
+
+Then extract the token and login payload in one step:
+
+```bash
+coros-mcp extract-from-dump coros_login.dump
+```
+
+This stores both the current token **and** the encrypted login payload. The server will
+automatically refresh the token when it expires — no repeat capture needed.
+
+**Alternative (no auto-refresh):** If you only have the token string, run:
 
 ```bash
 coros-mcp set-mobile-token
@@ -87,9 +104,12 @@ Remove the proxy settings from your Android device's Wi-Fi configuration.
 
 ## Token Lifetime
 
-The mobile token appears to be long-lived (observed valid for days). If `get_sleep_data`
-starts returning "Access token is invalid", simply repeat the capture steps and run
-`coros-mcp set-mobile-token` again.
+The mobile token expires after approximately 1 hour. When `extract-from-dump` has been
+used, the server refreshes it automatically in the background — `get_sleep_data` will
+always work without any manual intervention.
+
+If only `set-mobile-token` was used (no auto-refresh), re-run the capture and
+`extract-from-dump` once to permanently enable auto-refresh.
 
 ## Security Note
 

@@ -72,4 +72,6 @@ class StoredAuth(BaseModel):
     user_id: str
     region: str
     timestamp: int  # Unix milliseconds
-    mobile_access_token: Optional[str] = None  # token for apieu.coros.com (sleep data)
+    mobile_access_token: Optional[str] = None   # token for apieu.coros.com (sleep data)
+    mobile_login_payload: Optional[dict] = None  # encrypted login body for auto-refresh
+    mobile_yfheader: Optional[str] = None        # yfheader string for auto-refresh
