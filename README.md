@@ -93,10 +93,8 @@ You will be prompted for your email, password, and region (`eu`, `us`, or `asia`
 **Other auth commands:**
 
 ```bash
-coros-mcp auth-status                    # Check if authenticated
-coros-mcp auth-clear                     # Remove stored token
-coros-mcp extract-from-dump <dump_file>  # Import token from mitmproxy dump (legacy)
-coros-mcp set-mobile-token               # Manually store a mobile token (legacy)
+coros-mcp auth-status   # Check if authenticated
+coros-mcp auth-clear    # Remove stored token
 ```
 
 ---
@@ -254,11 +252,11 @@ coros-mcp/
 ├── server.py          # MCP server with tool definitions
 ├── coros_api.py       # Coros API client (auth, requests, parsers)
 ├── models.py          # Pydantic data models
+├── cli.py             # CLI commands (auth, auth-status, auth-clear)
 ├── auth/              # Token storage (keyring + encrypted file fallback)
 ├── pyproject.toml     # Project metadata & dependencies
-├── .env.example       # Example configuration
 └── docs/
-    └── discover-endpoints.md  # Guide for discovering undocumented endpoints
+    └── mobile-token.md  # Mobile API token background (legacy reference)
 ```
 
 ## Dependencies
@@ -266,6 +264,8 @@ coros-mcp/
 - [fastmcp](https://github.com/jlowin/fastmcp) — MCP framework
 - [httpx](https://www.python-httpx.org/) — Async HTTP client
 - [pydantic](https://docs.pydantic.dev/) — Data validation
+- [pycryptodome](https://pycryptodome.readthedocs.io/) — AES encryption for mobile API auth
+- [keyring](https://github.com/jaraco/keyring) — Secure token storage
 - [python-dotenv](https://github.com/theskumar/python-dotenv) — `.env` support
 
 ## Disclaimer
