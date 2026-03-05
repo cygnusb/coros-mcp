@@ -117,15 +117,32 @@ async def _mobile_login(email: str, password: str, region: str = "eu") -> tuple[
     url = mobile_base + MOBILE_LOGIN_ENDPOINT
     app_key = str(random.randint(1_000_000_000_000_000, 9_999_999_999_999_999))
     payload = {
-        "account": _mobile_encrypt(email, app_key),
+        "account": _mobile_encrypt(email, app_key) + "\n",
+        "accountType": 2,
         "appKey": app_key,
-        "pwd": _mobile_encrypt(_md5(password), app_key),
+        "clientType": 1,
+        "hasHrCalibrated": 0,
+        "kbValidity": 0,
+        "pwd": _mobile_encrypt(_md5(password), app_key) + "\n",
+        "region": "310|Europe/Berlin|US",
+        "skipValidation": False,
     }
+    yfheader = json.dumps({
+        "appVersion": 1125917087236096,
+        "clientType": 1,
+        "language": "en-US",
+        "mobileName": "sdk_gphone64_arm64,google,Google",
+        "releaseType": 1,
+        "systemVersion": "13",
+        "timezone": 4,
+        "versionCode": "404080400",
+    }, separators=(",", ":"))
     headers = {
         "content-type": "application/json",
         "accept-encoding": "gzip",
         "user-agent": "okhttp/4.12.0",
         "request-time": str(int(time.time() * 1000)),
+        "yfheader": yfheader,
     }
     async with httpx.AsyncClient(timeout=30) as client:
         resp = await client.post(url, json=payload, headers=headers)
