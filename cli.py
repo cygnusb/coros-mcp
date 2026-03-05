@@ -61,6 +61,7 @@ def cmd_auth_status() -> int:
         return 1
 
 
+
 def cmd_auth_clear() -> int:
     """Remove stored token from all backends."""
     result = clear_token()

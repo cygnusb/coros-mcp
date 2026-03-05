@@ -1,5 +1,5 @@
 """
-Coros MCP Server — Sleep & HRV data via the unofficial Coros Training Hub API.
+Coros MCP Server — Sleep, HRV, and training data via the unofficial Coros API.
 
 Usage:
     python server.py
@@ -154,6 +154,61 @@ async def get_daily_metrics(weeks: int = 4) -> dict:
 
     try:
         records = await coros_api.fetch_daily_records(auth, start_day, end_day)
+        return {
+            "records": [r.model_dump() for r in records],
+            "count": len(records),
+            "date_range": f"{start_day} – {end_day}",
+        }
+    except Exception as exc:
+        return {"error": str(exc), "records": []}
+
+
+# ---------------------------------------------------------------------------
+# Tool: get_sleep_data
+# ---------------------------------------------------------------------------
+
+@mcp.tool()
+async def get_sleep_data(weeks: int = 4) -> dict:
+    """
+    Fetch nightly sleep data from Coros for a configurable time range.
+
+    Returns per-night sleep stage breakdown (deep, light, REM, awake) and
+    sleep heart rate for each night.  Data comes from the Coros mobile API
+    (apieu.coros.com) which is separate from the Training Hub web API.
+
+    Parameters
+    ----------
+    weeks : int
+        Number of weeks to fetch (1–52). Default: 4.
+
+    Returns
+    -------
+    dict with keys: records (list of nightly records), count, date_range
+    Each record contains:
+      - date: YYYYMMDD (the morning date — sleep started the night before)
+      - total_duration_minutes: total sleep in minutes
+      - phases.deep_minutes: deep sleep
+      - phases.light_minutes: light sleep
+      - phases.rem_minutes: REM sleep
+      - phases.awake_minutes: time awake during the night
+      - phases.nap_minutes: daytime nap time (if any)
+      - avg_hr: average heart rate during sleep
+      - min_hr: minimum heart rate during sleep
+      - max_hr: maximum heart rate during sleep
+      - quality_score: sleep quality score (null if not computed)
+    """
+    auth = coros_api.get_stored_auth()
+    if auth is None:
+        return {"error": "Not authenticated. Call authenticate_coros first.", "records": []}
+
+    weeks = max(1, min(weeks, 52))
+    end_dt = datetime.now()
+    start_dt = end_dt - timedelta(weeks=weeks)
+    start_day = start_dt.strftime("%Y%m%d")
+    end_day = end_dt.strftime("%Y%m%d")
+
+    try:
+        records = await coros_api.fetch_sleep(auth, start_day, end_day)
         return {
             "records": [r.model_dump() for r in records],
             "count": len(records),
