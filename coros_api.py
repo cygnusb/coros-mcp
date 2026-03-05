@@ -3,7 +3,7 @@ Coros Training Hub API client.
 
 Auth mechanism: MD5-hashed password + accessToken header.
 HRV data comes from /dashboard/query (last 7 days of nightly RMSSD).
-Sleep phase data is NOT available through the Training Hub web API.
+Sleep phase data comes from the mobile API (/coros/data/statistic/daily on apieu.coros.com).
 """
 
 import hashlib
@@ -26,7 +26,7 @@ ENDPOINTS = {
     "dashboard": "/dashboard/query",        # contains sleepHrvData (last 7 days)
     "analyse": "/analyse/query",            # summary + t7dayList (28 days, has VO2max/fitness)
     "analyse_detail": "/analyse/dayDetail/query",  # daily metrics with date range (up to 24 weeks)
-    "sleep": "/sleep/query",                # NOT available on Training Hub API
+    "sleep": "/coros/data/statistic/daily",  # mobile API (apieu.coros.com)
     "activity_list": "/activity/query",
     "activity_detail": "/activity/detail/query",
     "sport_types": "/activity/fit/getImportSportList",
@@ -39,6 +39,12 @@ ENDPOINTS = {
 BASE_URLS = {
     "eu": "https://teameuapi.coros.com",
     "us": "https://teamapi.coros.com",
+}
+
+# Mobile app API — used for sleep data (different host from Training Hub web API)
+MOBILE_BASE_URLS = {
+    "eu": "https://apieu.coros.com",
+    "us": "https://apius.coros.com",
 }
 
 TOKEN_TTL_MS = 24 * 60 * 60 * 1000  # 24 hours in milliseconds
@@ -82,26 +88,50 @@ def _base_url(region: str) -> str:
 
 async def login(email: str, password: str, region: str = "eu") -> StoredAuth:
     """Authenticate against Coros API and persist the token."""
-    url = _base_url(region) + ENDPOINTS["login"]
-    payload = {
+    pwd_hash = _md5(password)
+    login_payload = {
         "account": email,
         "accountType": 2,
-        "pwd": _md5(password),
+        "pwd": pwd_hash,
     }
+    json_headers = {"Content-Type": "application/json"}
+
     async with httpx.AsyncClient(timeout=30) as client:
-        resp = await client.post(url, json=payload, headers={"Content-Type": "application/json"})
+        # Training Hub token (teameuapi.coros.com)
+        resp = await client.post(
+            _base_url(region) + ENDPOINTS["login"],
+            json=login_payload,
+            headers=json_headers,
+        )
         resp.raise_for_status()
         body = resp.json()
 
-    if body.get("result") != "0000":
-        raise ValueError(f"Coros login failed: {body.get('message', 'unknown error')}")
+        if body.get("result") != "0000":
+            raise ValueError(f"Coros login failed: {body.get('message', 'unknown error')}")
 
-    data = body.get("data", {})
+        data = body.get("data", {})
+
+        # Mobile API token (apieu.coros.com) — needed for sleep data
+        mobile_token = None
+        try:
+            mobile_resp = await client.post(
+                MOBILE_BASE_URLS.get(region, MOBILE_BASE_URLS["eu"]) + ENDPOINTS["login"],
+                json=login_payload,
+                headers=json_headers,
+            )
+            mobile_resp.raise_for_status()
+            mobile_body = mobile_resp.json()
+            if mobile_body.get("result") == "0000":
+                mobile_token = mobile_body.get("data", {}).get("accessToken")
+        except Exception:
+            pass  # mobile login is best-effort; sleep data will fail gracefully
+
     auth = StoredAuth(
         access_token=data["accessToken"],
         user_id=data["userId"],
         region=region,
         timestamp=int(time.time() * 1000),
+        mobile_access_token=mobile_token,
     )
     _save_auth(auth)
     return auth
@@ -471,25 +501,43 @@ async def create_workout(
 
 
 # ---------------------------------------------------------------------------
-# Sleep data  (NOT available through Training Hub web API)
+# Sleep data  (mobile API: apieu.coros.com/coros/data/statistic/daily)
 # ---------------------------------------------------------------------------
 
 async def fetch_sleep(auth: StoredAuth, start_day: str, end_day: str) -> list[SleepRecord]:
     """
-    Fetch sleep data for a date range.
+    Fetch sleep stage data for a date range from the Coros mobile API.
 
-    WARNING: Sleep phase data (deep/light/REM/awake) is NOT available through
-    the Coros Training Hub web API.  This endpoint is a placeholder for when
-    the correct mobile-app API endpoint is discovered.
+    Uses POST /coros/data/statistic/daily on apieu.coros.com (not the Training
+    Hub web API).  Returns per-night records with deep/light/REM/awake minutes
+    and sleep heart rate.
+
+    start_day / end_day: YYYYMMDD strings.
     """
-    url = _base_url(auth.region) + ENDPOINTS["sleep"]
-    params = {
-        "userId": auth.user_id,
-        "startDay": start_day,
-        "endDay": end_day,
+    mobile_token = auth.mobile_access_token
+    if not mobile_token:
+        raise ValueError(
+            "No mobile API token stored. Please re-authenticate with authenticate_coros "
+            "to obtain a token valid for sleep data."
+        )
+
+    mobile_base = MOBILE_BASE_URLS.get(auth.region, MOBILE_BASE_URLS["eu"])
+    url = mobile_base + ENDPOINTS["sleep"]
+    payload = {
+        "allDeviceSleep": 1,
+        "dataType": [5],
+        "dataVersion": 0,
+        "startTime": int(start_day),
+        "endTime": int(end_day),
+        "statisticType": 1,
     }
     async with httpx.AsyncClient(timeout=30) as client:
-        resp = await client.get(url, params=params, headers=_auth_headers(auth))
+        resp = await client.post(
+            url,
+            params={"accessToken": mobile_token},
+            json=payload,
+            headers={"Content-Type": "application/json", "accesstoken": mobile_token},
+        )
         resp.raise_for_status()
         body = resp.json()
 
@@ -497,19 +545,22 @@ async def fetch_sleep(auth: StoredAuth, start_day: str, end_day: str) -> list[Sl
         raise ValueError(f"Coros sleep API error: {body.get('message', 'unknown error')}")
 
     records: list[SleepRecord] = []
-    for item in body.get("data", {}).get("list", []):
-        phases = SleepPhases(
-            deep_minutes=item.get("deepSleepMinutes"),
-            light_minutes=item.get("lightSleepMinutes"),
-            rem_minutes=item.get("remSleepMinutes"),
-            awake_minutes=item.get("awakeSleepMinutes"),
-        )
+    for item in body.get("data", {}).get("statisticData", {}).get("dayDataList", []):
+        sd = item.get("sleepData", {})
+        quality = item.get("performance")
         records.append(SleepRecord(
-            date=str(item.get("date", "")),
-            total_duration_minutes=item.get("totalSleepMinutes"),
-            phases=phases,
-            sleep_start=item.get("sleepStartTime"),
-            sleep_end=item.get("sleepEndTime"),
-            quality_score=item.get("sleepScore"),
+            date=str(item.get("happenDay", "")),
+            total_duration_minutes=sd.get("totalSleepTime"),
+            phases=SleepPhases(
+                deep_minutes=sd.get("deepTime"),
+                light_minutes=sd.get("lightTime"),
+                rem_minutes=sd.get("eyeTime"),
+                awake_minutes=sd.get("wakeTime"),
+                nap_minutes=sd.get("shortSleepTime") or None,
+            ),
+            avg_hr=sd.get("avgHeartRate"),
+            min_hr=sd.get("minHeartRate"),
+            max_hr=sd.get("maxHeartRate"),
+            quality_score=quality if quality != -1 else None,
         ))
-    return records
+    return sorted(records, key=lambda r: r.date)

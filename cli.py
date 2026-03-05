@@ -61,6 +61,28 @@ def cmd_auth_status() -> int:
         return 1
 
 
+def cmd_set_mobile_token() -> int:
+    """Store a mobile API token (from mitmproxy capture) for sleep data access."""
+    import json
+    from coros_api import _load_auth, _save_auth
+
+    auth = _load_auth()
+    if auth is None:
+        print("✗ Not authenticated. Run 'coros-mcp auth' first.")
+        return 1
+
+    print("Paste the mobile accessToken from your mitmproxy capture:")
+    token = input("Token: ").strip()
+    if not token:
+        print("Error: token is required.")
+        return 1
+
+    auth.mobile_access_token = token
+    _save_auth(auth)
+    print("✓ Mobile token stored. Sleep data should now work.")
+    return 0
+
+
 def cmd_auth_clear() -> int:
     """Remove stored token from all backends."""
     result = clear_token()
@@ -77,10 +99,11 @@ def cmd_help() -> int:
         """Coros MCP Server — CLI
 
 Usage:
-  coros-mcp auth          Authenticate with your Coros account
-  coros-mcp auth-status   Check if a valid token is stored
-  coros-mcp auth-clear    Remove stored token
-  coros-mcp help          Show this help message
+  coros-mcp auth                Authenticate with your Coros account
+  coros-mcp auth-status         Check if a valid token is stored
+  coros-mcp auth-clear          Remove stored token
+  coros-mcp set-mobile-token    Store a mobile API token for sleep data (from mitmproxy)
+  coros-mcp help                Show this help message
 """
     )
     return 0
@@ -92,6 +115,7 @@ def main() -> None:
         "auth": cmd_auth,
         "auth-status": cmd_auth_status,
         "auth-clear": cmd_auth_clear,
+        "set-mobile-token": cmd_set_mobile_token,
         "help": cmd_help,
         "--help": cmd_help,
         "-h": cmd_help,

@@ -1,6 +1,6 @@
 # coros-mcp
 
-A [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) server that fetches HRV and daily metrics from the unofficial Coros Training Hub API and exposes them to AI assistants like Claude.
+A [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) server that fetches sleep, HRV, and training data from the unofficial Coros API and exposes them to AI assistants like Claude.
 
 **No API key required.** This server authenticates directly with your Coros Training Hub credentials. Your token is stored securely in your system keyring (or an encrypted local file as fallback), never transmitted anywhere except to Coros.
 
@@ -8,6 +8,7 @@ A [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) server that f
 
 Ask your AI assistant questions like:
 
+- "How much deep sleep and REM did I get last week?"
 - "What was my HRV trend over the last 4 weeks?"
 - "Show me my resting heart rate and training load for last week"
 - "How many steps did I average per day this month?"
@@ -22,6 +23,7 @@ Ask your AI assistant questions like:
 | `authenticate_coros` | Log in with email and password — token stored securely in keyring |
 | `check_coros_auth` | Check whether a valid auth token is present |
 | `get_daily_metrics` | Fetch daily metrics (HRV, resting HR, training load, VO2max, stamina, and more) for n weeks (default: 4) |
+| `get_sleep_data` | Fetch nightly sleep stages (deep, light, REM, awake) and sleep HR for n weeks (default: 4) |
 | `list_activities` | List activities for a date range with summary metrics |
 | `get_activity_detail` | Fetch full detail for a single activity (laps, HR zones, power zones) |
 | `list_workouts` | List all saved structured workout programs |
@@ -91,8 +93,9 @@ You will be prompted for your email, password, and region (`eu`, `us`, or `asia`
 **Other auth commands:**
 
 ```bash
-coros-mcp auth-status   # Check if authenticated
-coros-mcp auth-clear    # Remove stored token
+coros-mcp auth-status        # Check if authenticated
+coros-mcp auth-clear         # Remove stored token
+coros-mcp set-mobile-token   # Store mobile API token for sleep data
 ```
 
 ---
@@ -147,6 +150,34 @@ Each record includes:
 | `ltsp` | analyse (merge) | Lactate threshold pace (s/km) |
 | `stamina_level` | analyse (merge) | Base fitness level |
 | `stamina_level_7d` | analyse (merge) | 7-day fitness trend |
+
+### `get_sleep_data`
+
+Fetch nightly sleep stage data for a configurable number of weeks (default: 4).
+
+```json
+{ "weeks": 4 }
+```
+
+Returns: `records` (list), `count`, `date_range`
+
+Each record includes:
+
+| Field | Description |
+|-------|-------------|
+| `date` | Date (YYYYMMDD) — the morning after the sleep |
+| `total_duration_minutes` | Total sleep in minutes |
+| `phases.deep_minutes` | Deep sleep |
+| `phases.light_minutes` | Light sleep |
+| `phases.rem_minutes` | REM sleep |
+| `phases.awake_minutes` | Time awake during the night |
+| `phases.nap_minutes` | Daytime nap time (null if none) |
+| `avg_hr` | Average heart rate during sleep |
+| `min_hr` | Minimum heart rate during sleep |
+| `max_hr` | Maximum heart rate during sleep |
+| `quality_score` | Sleep quality score (null if not computed) |
+
+> **Note:** Sleep data is fetched from the Coros mobile API (`apieu.coros.com`), which uses a separate token from the Training Hub web API. After running `coros-mcp auth`, you also need to run `coros-mcp set-mobile-token` and paste the `accessToken` from a mitmproxy-captured Coros app session. See [docs/mobile-token.md](docs/mobile-token.md) for instructions.
 
 ### `list_activities`
 

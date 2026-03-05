@@ -7,15 +7,17 @@ class SleepPhases(BaseModel):
     light_minutes: Optional[int] = None
     rem_minutes: Optional[int] = None
     awake_minutes: Optional[int] = None
+    nap_minutes: Optional[int] = None    # shortSleepTime — daytime naps
 
 
 class SleepRecord(BaseModel):
     date: str
     total_duration_minutes: Optional[int] = None
     phases: Optional[SleepPhases] = None
-    sleep_start: Optional[str] = None
-    sleep_end: Optional[str] = None
-    quality_score: Optional[int] = None
+    avg_hr: Optional[int] = None
+    min_hr: Optional[int] = None
+    max_hr: Optional[int] = None
+    quality_score: Optional[int] = None  # -1 = not computed
 
 
 class HRVRecord(BaseModel):
@@ -70,3 +72,4 @@ class StoredAuth(BaseModel):
     user_id: str
     region: str
     timestamp: int  # Unix milliseconds
+    mobile_access_token: Optional[str] = None  # token for apieu.coros.com (sleep data)
