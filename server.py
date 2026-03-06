@@ -68,22 +68,69 @@ async def authenticate_coros(
 
 
 # ---------------------------------------------------------------------------
+# Tool: authenticate_coros_mobile
+# ---------------------------------------------------------------------------
+
+@mcp.tool()
+async def authenticate_coros_mobile(
+    email: str,
+    password: str,
+    region: str = "eu",
+) -> dict:
+    """
+    Authenticate with the Coros mobile API only and store the mobile token.
+
+    This is needed for sleep data (deep/light/REM/awake phases) which is
+    only available through the mobile API (apieu.coros.com), not the
+    Training Hub web API.
+
+    Parameters
+    ----------
+    email : str
+        Coros account email address.
+    password : str
+        Coros account password (plain text — encrypted before sending).
+    region : str
+        "eu" (default) or "us".
+
+    Returns
+    -------
+    dict with keys: authenticated, region, message
+    """
+    try:
+        auth = await coros_api.login_mobile(email, password, region)
+        return {
+            "authenticated": True,
+            "user_id": auth.user_id or "(web auth required for user_id)",
+            "region": auth.region,
+            "message": "Mobile token stored. Sleep data is now available.",
+        }
+    except Exception as exc:
+        return {
+            "authenticated": False,
+            "error": str(exc),
+        }
+
+
+# ---------------------------------------------------------------------------
 # Tool: check_coros_auth
 # ---------------------------------------------------------------------------
 
 @mcp.tool()
 async def check_coros_auth() -> dict:
     """
-    Check whether a valid Coros access token is stored locally.
+    Check whether valid Coros access tokens are stored locally.
 
     Returns
     -------
-    dict with keys: authenticated, user_id, region, expires_in_hours (approx)
+    dict with keys: authenticated, user_id, region, expires_in_hours,
+    mobile_authenticated, mobile_token_status
     """
     auth = coros_api.get_stored_auth()
     if auth is None:
         return {
             "authenticated": False,
+            "mobile_authenticated": False,
             "message": "No valid token found. Call authenticate_coros first.",
         }
 
@@ -92,11 +139,21 @@ async def check_coros_auth() -> dict:
     remaining_ms = coros_api.TOKEN_TTL_MS - age_ms
     remaining_hours = round(remaining_ms / 3_600_000, 1)
 
+    has_mobile = bool(auth.mobile_access_token)
+    if has_mobile:
+        mobile_status = "present (refresh via stored payload)"
+    elif auth.mobile_login_payload:
+        mobile_status = "expired (can auto-refresh)"
+    else:
+        mobile_status = "missing (run auth or auth-mobile)"
+
     return {
-        "authenticated": True,
+        "authenticated": bool(auth.access_token),
         "user_id": auth.user_id,
         "region": auth.region,
         "expires_in_hours": remaining_hours,
+        "mobile_authenticated": has_mobile,
+        "mobile_token_status": mobile_status,
     }
 
 

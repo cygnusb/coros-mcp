@@ -4,7 +4,7 @@ import getpass
 import sys
 
 from auth.storage import clear_token, get_token, is_keyring_available
-from coros_api import get_stored_auth, login
+from coros_api import get_stored_auth, login, login_mobile
 
 
 def cmd_auth() -> int:
@@ -46,11 +46,95 @@ def cmd_auth() -> int:
         return 1
 
 
+def cmd_auth_web() -> int:
+    """Authenticate with Coros web API only (no mobile token)."""
+    print("Coros MCP — Web API Authentication")
+    print()
+
+    email = input("Email: ").strip()
+    if not email:
+        print("Error: email is required.")
+        return 1
+
+    password = getpass.getpass("Password: ")
+    if not password:
+        print("Error: password is required.")
+        return 1
+
+    print()
+    print("Region options: eu, us, asia")
+    region = input("Region [eu]: ").strip().lower() or "eu"
+    if region not in ("eu", "us", "asia"):
+        print(f"Warning: unknown region '{region}', using it anyway.")
+
+    print()
+    print("Authenticating (web only)…")
+    try:
+        auth = asyncio.run(login(email, password, region, skip_mobile=True))
+        print(f"✓ Web API authenticated as user {auth.user_id} (region: {auth.region})")
+        print("  Mobile token skipped — sleep data will not be available.")
+        return 0
+    except Exception as e:
+        print(f"✗ Authentication failed: {e}")
+        return 1
+
+
+def cmd_auth_mobile() -> int:
+    """Authenticate with Coros mobile API only."""
+    print("Coros MCP — Mobile API Authentication")
+    print()
+
+    email = input("Email: ").strip()
+    if not email:
+        print("Error: email is required.")
+        return 1
+
+    password = getpass.getpass("Password: ")
+    if not password:
+        print("Error: password is required.")
+        return 1
+
+    print()
+    print("Region options: eu, us, asia")
+    region = input("Region [eu]: ").strip().lower() or "eu"
+    if region not in ("eu", "us", "asia"):
+        print(f"Warning: unknown region '{region}', using it anyway.")
+
+    print()
+    print("Authenticating (mobile only)…")
+    try:
+        auth = asyncio.run(login_mobile(email, password, region))
+        print(f"✓ Mobile API authenticated (region: {auth.region})")
+        print("  Sleep data is now available.")
+        return 0
+    except Exception as e:
+        print(f"✗ Mobile authentication failed: {e}")
+        return 1
+
+
 def cmd_auth_status() -> int:
-    """Check whether a valid token is stored."""
+    """Check whether valid tokens are stored."""
     auth = get_stored_auth()
     if auth:
-        print(f"✓ Authenticated — user_id: {auth.user_id}, region: {auth.region}")
+        import time
+        age_ms = int(time.time() * 1000) - auth.timestamp
+        from coros_api import TOKEN_TTL_MS
+        remaining_hours = round((TOKEN_TTL_MS - age_ms) / 3_600_000, 1)
+
+        # Web token status
+        if auth.access_token:
+            print(f"✓ Web API    — user_id: {auth.user_id}, region: {auth.region}, expires in ~{remaining_hours}h")
+        else:
+            print("✗ Web API    — not authenticated")
+
+        # Mobile token status
+        if auth.mobile_access_token:
+            print("✓ Mobile API — token present (sleep data available)")
+        elif auth.mobile_login_payload:
+            print("⚠ Mobile API — token expired (can auto-refresh)")
+        else:
+            print("✗ Mobile API — not authenticated (run 'coros-mcp auth' or 'coros-mcp auth-mobile')")
+
         return 0
     else:
         result = get_token()
@@ -78,8 +162,10 @@ def cmd_help() -> int:
         """Coros MCP Server — CLI
 
 Usage:
-  coros-mcp auth          Authenticate with your Coros account
-  coros-mcp auth-status   Check if a valid token is stored
+  coros-mcp auth          Authenticate with your Coros account (web + mobile)
+  coros-mcp auth-web      Authenticate web API only (no sleep data)
+  coros-mcp auth-mobile   Authenticate mobile API only (sleep data)
+  coros-mcp auth-status   Check status of both tokens
   coros-mcp auth-clear    Remove stored token
   coros-mcp help          Show this help message
 """
@@ -91,6 +177,8 @@ def main() -> None:
     command = sys.argv[1] if len(sys.argv) > 1 else "help"
     commands = {
         "auth": cmd_auth,
+        "auth-web": cmd_auth_web,
+        "auth-mobile": cmd_auth_mobile,
         "auth-status": cmd_auth_status,
         "auth-clear": cmd_auth_clear,
         "help": cmd_help,

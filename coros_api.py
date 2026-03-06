@@ -171,7 +171,7 @@ def _base_url(region: str) -> str:
     return BASE_URLS.get(region, BASE_URLS["eu"])
 
 
-async def login(email: str, password: str, region: str = "eu") -> StoredAuth:
+async def login(email: str, password: str, region: str = "eu", *, skip_mobile: bool = False) -> StoredAuth:
     """Authenticate against Coros API and persist the token."""
     pwd_hash = _md5(password)
     login_payload = {
@@ -200,14 +200,42 @@ async def login(email: str, password: str, region: str = "eu") -> StoredAuth:
     # Uses AES-encrypted credentials (key reverse-engineered from libencrypt-lib.so)
     mobile_token = None
     mobile_payload = None
-    try:
-        mobile_token, mobile_payload = await _mobile_login(email, password, region)
-    except Exception:
-        pass  # mobile login is best-effort; sleep data will fail gracefully
+    if not skip_mobile:
+        try:
+            mobile_token, mobile_payload = await _mobile_login(email, password, region)
+        except Exception:
+            pass  # mobile login is best-effort; sleep data will fail gracefully
 
     auth = StoredAuth(
         access_token=data["accessToken"],
         user_id=data["userId"],
+        region=region,
+        timestamp=int(time.time() * 1000),
+        mobile_access_token=mobile_token,
+        mobile_login_payload=mobile_payload,
+    )
+    _save_auth(auth)
+    return auth
+
+
+async def login_mobile(email: str, password: str, region: str = "eu") -> StoredAuth:
+    """Authenticate against the Coros mobile API only and persist the token.
+
+    If an existing StoredAuth exists, updates only the mobile fields.
+    Otherwise creates a minimal StoredAuth with only mobile credentials.
+    """
+    mobile_token, mobile_payload = await _mobile_login(email, password, region)
+
+    existing = _load_auth()
+    if existing:
+        existing.mobile_access_token = mobile_token
+        existing.mobile_login_payload = mobile_payload
+        _save_auth(existing)
+        return existing
+
+    auth = StoredAuth(
+        access_token="",
+        user_id="",
         region=region,
         timestamp=int(time.time() * 1000),
         mobile_access_token=mobile_token,
