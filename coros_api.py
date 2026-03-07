@@ -925,6 +925,41 @@ async def schedule_workout(
         raise ValueError(f"Coros schedule update error: {body.get('message', 'unknown error')}")
 
 
+async def remove_scheduled_workout(
+    auth: StoredAuth,
+    plan_id: str,
+    id_in_plan: str,
+    plan_program_id: Optional[str] = None,
+) -> None:
+    """
+    Remove a scheduled workout from the Coros training calendar.
+
+    plan_id: top-level plan ID (the 'id' field from list_planned_activities).
+    id_in_plan: entity's idInPlan value.
+    plan_program_id: entity's planProgramId (defaults to id_in_plan if omitted).
+    """
+    payload = {
+        "versionObjects": [{
+            "id": id_in_plan,
+            "planProgramId": plan_program_id or id_in_plan,
+            "planId": plan_id,
+            "status": 3,  # 3 = delete
+        }],
+        "pbVersion": 2,
+    }
+    async with httpx.AsyncClient(timeout=30) as client:
+        resp = await client.post(
+            _base_url(auth.region) + ENDPOINTS["schedule_update"],
+            json=payload,
+            headers=_auth_headers(auth),
+        )
+        resp.raise_for_status()
+        body = resp.json()
+
+    if body.get("result") != "0000":
+        raise ValueError(f"Coros schedule delete error: {body.get('message', 'unknown error')}")
+
+
 async def fetch_exercises(auth: StoredAuth, sport_type: int) -> list[dict]:
     """
     Fetch the exercise catalogue for a given sport type.

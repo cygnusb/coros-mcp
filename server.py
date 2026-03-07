@@ -509,6 +509,44 @@ async def schedule_workout(
 
 
 # ---------------------------------------------------------------------------
+# Tool: remove_scheduled_workout
+# ---------------------------------------------------------------------------
+
+@mcp.tool()
+async def remove_scheduled_workout(
+    plan_id: str,
+    id_in_plan: str,
+    plan_program_id: str = "",
+) -> dict:
+    """
+    Remove a scheduled workout from the Coros training calendar.
+
+    Parameters
+    ----------
+    plan_id : str
+        Top-level plan ID — the 'id' field returned by list_planned_activities.
+    id_in_plan : str
+        The entity's idInPlan value from list_planned_activities.
+    plan_program_id : str
+        The entity's planProgramId (leave empty to use id_in_plan).
+
+    Returns
+    -------
+    dict with keys: removed, plan_id, id_in_plan
+    """
+    auth = coros_api.get_stored_auth()
+    if auth is None:
+        return {"error": "Not authenticated."}
+    try:
+        await coros_api.remove_scheduled_workout(
+            auth, plan_id, id_in_plan, plan_program_id or None
+        )
+        return {"removed": True, "plan_id": plan_id, "id_in_plan": id_in_plan}
+    except Exception as exc:
+        return {"error": str(exc), "removed": False}
+
+
+# ---------------------------------------------------------------------------
 # Tool: create_strength_workout
 # ---------------------------------------------------------------------------
 
