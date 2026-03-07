@@ -22,6 +22,8 @@ from models import ActivitySummary, DailyRecord, HRVRecord, SleepPhases, SleepRe
 # Endpoint constants
 # ---------------------------------------------------------------------------
 
+USER_AGENT = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36"
+
 MOBILE_LOGIN_ENDPOINT = "/coros/user/login"
 
 # AES key hardcoded in libencrypt-lib.so (reverse-engineered from Coros APK)
@@ -179,7 +181,7 @@ async def login(email: str, password: str, region: str = "eu", *, skip_mobile: b
         "accountType": 2,
         "pwd": pwd_hash,
     }
-    json_headers = {"Content-Type": "application/json"}
+    json_headers = {"Content-Type": "application/json", "User-Agent": USER_AGENT}
 
     async with httpx.AsyncClient(timeout=30) as client:
         # Training Hub token (teameuapi.coros.com)
@@ -260,6 +262,7 @@ def get_stored_auth() -> Optional[StoredAuth]:
 def _auth_headers(auth: StoredAuth) -> dict:
     return {
         "Content-Type": "application/json",
+        "User-Agent": USER_AGENT,
         "accessToken": auth.access_token,
         "yfheader": json.dumps({"userId": auth.user_id}),
     }
