@@ -15,12 +15,16 @@ Ask your AI assistant questions like:
 - "List my rides from last month"
 - "Show me the details of my last long ride"
 - "Create a 90-minute sweet spot workout for me"
+- "What's on my training calendar next week?"
+- "Schedule my VO2 workout for Thursday"
+- "Create a 20-minute strength circuit with squats, lunges, and planks"
 
 ## Features
 
 | Tool | Description |
 |------|-------------|
 | `authenticate_coros` | Log in with email and password — token stored securely in keyring |
+| `authenticate_coros_mobile` | Log in to the mobile API only (useful for sleep data troubleshooting) |
 | `check_coros_auth` | Check whether a valid auth token is present |
 | `get_daily_metrics` | Fetch daily metrics (HRV, resting HR, training load, VO2max, stamina, and more) for n weeks (default: 4) |
 | `get_sleep_data` | Fetch nightly sleep stages (deep, light, REM, awake) and sleep HR for n weeks (default: 4) |
@@ -28,6 +32,11 @@ Ask your AI assistant questions like:
 | `get_activity_detail` | Fetch full detail for a single activity (laps, HR zones, power zones) |
 | `list_workouts` | List all saved structured workout programs |
 | `create_workout` | Create a new structured workout with named steps and power targets |
+| `list_planned_activities` | List planned workouts from the Coros training calendar |
+| `schedule_workout` | Schedule an existing workout on a calendar day |
+| `remove_scheduled_workout` | Remove a scheduled workout from the calendar |
+| `create_strength_workout` | Create a structured strength workout with sets, reps, or timed exercises |
+| `list_exercises` | Browse the Coros exercise catalogue, especially for strength workouts |
 
 ---
 
@@ -88,13 +97,14 @@ Run the following command in your terminal — **outside** of any Claude session
 coros-mcp auth
 ```
 
-You will be prompted for your email, password, and region (`eu`, `us`, or `asia`). Your credentials are sent directly to Coros and the token is stored securely in your system keyring (or an encrypted local file as fallback). **You only need to do this once** — the token persists across restarts.
+You will be prompted for your email, password, and region (`eu`, `us`, or `asia`). This stores both the Training Hub web token and the mobile API token used for sleep data. Your credentials are sent directly to Coros and the token is stored securely in your system keyring (or an encrypted local file as fallback). **You only need to do this once** — the token persists across restarts.
 
 **Other auth commands:**
 
 ```bash
+coros-mcp auth-mobile   # Mobile API only (sleep data)
 coros-mcp auth-status   # Check if authenticated
-coros-mcp auth-clear    # Remove stored token
+coros-mcp auth-clear    # Remove stored tokens
 ```
 
 ---
@@ -111,15 +121,25 @@ Log in with your Coros credentials. The auth token is stored securely in your sy
 
 Returns: `authenticated`, `user_id`, `region`, `message`
 
+### `authenticate_coros_mobile`
+
+Authenticate with the Coros mobile API only. This is mainly useful if you need to restore sleep-data access without redoing full web authentication.
+
+```json
+{ "email": "you@example.com", "password": "yourpassword", "region": "eu" }
+```
+
+Returns: `authenticated`, `user_id`, `region`, `message`
+
 ### `check_coros_auth`
 
-Check whether a valid token is stored and how long ago it was issued.
+Check whether valid web and mobile tokens are stored and how long the web token remains valid.
 
 ```json
 {}
 ```
 
-Returns: `authenticated`, `user_id`, `region`, `expires_in_hours`
+Returns: `authenticated`, `user_id`, `region`, `expires_in_hours`, `mobile_authenticated`, `mobile_token_status`
 
 ### `get_daily_metrics`
 
@@ -236,6 +256,85 @@ Create a new structured workout. Workouts appear in the Coros app and can be syn
 
 Returns: `workout_id`, `name`, `total_minutes`, `steps_count`, `message`
 
+### `list_planned_activities`
+
+List planned activities from the Coros training calendar.
+
+```json
+{ "start_day": "20260309", "end_day": "20260316" }
+```
+
+Returns: `activities` (list), `count`, `date_range`
+
+### `schedule_workout`
+
+Add an existing workout from your library to the Coros training calendar.
+
+```json
+{ "workout_id": "1234567890", "happen_day": "20260312", "sort_no": 1 }
+```
+
+Returns: `scheduled`, `workout_id`, `happen_day`
+
+### `remove_scheduled_workout`
+
+Remove a scheduled workout from the Coros training calendar.
+
+```json
+{
+  "plan_id": "987654321",
+  "id_in_plan": "1234567890",
+  "plan_program_id": "1234567890"
+}
+```
+
+`plan_id`, `id_in_plan`, and `plan_program_id` come from `list_planned_activities`. If `plan_program_id` is missing, you can usually reuse `id_in_plan`.
+
+Returns: `removed`, `plan_id`, `id_in_plan`
+
+### `create_strength_workout`
+
+Create a structured strength workout with repeated sets. Exercises must come from the Coros exercise catalogue.
+
+```json
+{
+  "name": "Leg Circuit",
+  "sets": 3,
+  "exercises": [
+    {
+      "origin_id": "54",
+      "name": "T1061",
+      "overview": "sid_strength_squats",
+      "target_type": 3,
+      "target_value": 12,
+      "rest_seconds": 45
+    },
+    {
+      "origin_id": "130",
+      "name": "T1176",
+      "overview": "sid_strength_plank",
+      "target_type": 2,
+      "target_value": 60,
+      "rest_seconds": 30
+    }
+  ]
+}
+```
+
+`target_type`: `2` = time in seconds, `3` = reps
+
+Returns: `workout_id`, `name`, `sets`, `exercise_count`
+
+### `list_exercises`
+
+List the Coros exercise catalogue for a sport type. Default `sport_type=4` returns strength exercises.
+
+```json
+{ "sport_type": 4 }
+```
+
+Returns: `exercises` (list), `count`, `sport_type`
+
 ---
 
 ## Requirements
@@ -252,7 +351,7 @@ coros-mcp/
 ├── server.py          # MCP server with tool definitions
 ├── coros_api.py       # Coros API client (auth, requests, parsers)
 ├── models.py          # Pydantic data models
-├── cli.py             # CLI commands (auth, auth-status, auth-clear)
+├── cli.py             # CLI commands (auth, auth-mobile, auth-status, auth-clear)
 ├── auth/              # Token storage (keyring + encrypted file fallback)
 ├── pyproject.toml     # Project metadata & dependencies
 └── docs/
