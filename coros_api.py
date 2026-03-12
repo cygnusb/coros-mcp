@@ -40,6 +40,7 @@ ENDPOINTS = {
     "sport_types": "/activity/fit/getImportSportList",
     "workout_list": "/training/program/query",  # POST — list/fetch workout programs
     "workout_add": "/training/program/add",     # POST — create new structured workout
+    "workout_delete": "/training/program/delete",  # POST — delete workout(s), body: ["id1", ...]
     "schedule_sum": "/training/schedule/querysum",  # GET — planned calendar aggregates
     "schedule": "/training/schedule/query",         # GET — planned calendar detail
     "schedule_update": "/training/schedule/update", # POST — add workout to calendar
@@ -682,6 +683,21 @@ async def create_workout(
         raise ValueError(f"Coros workout create error: {body.get('message', 'unknown error')}")
 
     return str(body.get("data", ""))
+
+
+async def delete_workout(auth: StoredAuth, workout_id: str) -> None:
+    """Delete a workout program by ID."""
+    async with httpx.AsyncClient(timeout=30) as client:
+        resp = await client.post(
+            _base_url(auth.region) + ENDPOINTS["workout_delete"],
+            json=[workout_id],
+            headers=_auth_headers(auth),
+        )
+        resp.raise_for_status()
+        body = resp.json()
+
+    if body.get("result") != "0000":
+        raise ValueError(f"Coros workout delete error: {body.get('message', 'unknown error')}")
 
 
 # ---------------------------------------------------------------------------

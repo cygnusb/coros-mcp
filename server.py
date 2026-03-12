@@ -455,6 +455,40 @@ async def create_workout(
 
 
 # ---------------------------------------------------------------------------
+# Tool: delete_workout
+# ---------------------------------------------------------------------------
+
+@mcp.tool()
+async def delete_workout(
+    workout_id: str,
+) -> dict:
+    """
+    Delete a workout program from the Coros account.
+
+    Parameters
+    ----------
+    workout_id : str
+        The workout ID to delete (from list_workouts).
+
+    Returns
+    -------
+    dict with keys: deleted, workout_id, message
+    """
+    auth = coros_api.get_stored_auth()
+    if auth is None:
+        return {"error": "Not authenticated."}
+    try:
+        await coros_api.delete_workout(auth, workout_id)
+        return {
+            "deleted": True,
+            "workout_id": workout_id,
+            "message": "Workout deleted.",
+        }
+    except Exception as exc:
+        return {"error": str(exc)}
+
+
+# ---------------------------------------------------------------------------
 # Tool: list_planned_activities
 # ---------------------------------------------------------------------------
 
