@@ -399,15 +399,25 @@ async def create_workout(
     name : str
         Workout name (e.g. "Z2 Erholung 60min").
     steps : list[dict]
-        List of workout steps. Each step must have:
+        List of workout steps. Each step is either a plain step or a repeat group.
+
+        Plain step:
           - name (str): step label, e.g. "10:00 Einfahren"
           - duration_minutes (float): step duration in minutes
           - power_low_w (int): lower power target in watts
           - power_high_w (int): upper power target in watts
+
+        Repeat group (for intervals):
+          - repeat (int): number of repetitions
+          - steps (list[dict]): sub-steps (same format as plain steps)
+
         Example:
           [
             {"name": "Einfahren", "duration_minutes": 10, "power_low_w": 148, "power_high_w": 192},
-            {"name": "Z2 Block", "duration_minutes": 40, "power_low_w": 192, "power_high_w": 221},
+            {"repeat": 3, "steps": [
+              {"name": "Sweetspot", "duration_minutes": 10, "power_low_w": 265, "power_high_w": 285},
+              {"name": "Erholung", "duration_minutes": 3, "power_low_w": 150, "power_high_w": 175},
+            ]},
             {"name": "Ausfahren", "duration_minutes": 10, "power_low_w": 100, "power_high_w": 165},
           ]
     sport_type : int
@@ -423,12 +433,21 @@ async def create_workout(
         return {"error": "Not authenticated."}
     try:
         workout_id = await coros_api.create_workout(auth, name, steps, sport_type)
-        total_minutes = sum(s["duration_minutes"] for s in steps)
+        total_minutes = 0
+        steps_count = 0
+        for s in steps:
+            if "repeat" in s:
+                sub_mins = sum(sub["duration_minutes"] for sub in s["steps"])
+                total_minutes += sub_mins * s["repeat"]
+                steps_count += 1 + len(s["steps"])
+            else:
+                total_minutes += s["duration_minutes"]
+                steps_count += 1
         return {
             "workout_id": workout_id,
             "name": name,
             "total_minutes": total_minutes,
-            "steps_count": len(steps),
+            "steps_count": steps_count,
             "message": "Workout created. Open Coros app → Workouts to sync to watch.",
         }
     except Exception as exc:

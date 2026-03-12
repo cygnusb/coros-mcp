@@ -563,36 +563,105 @@ async def create_workout(
     """
     Create a new structured workout program.
 
-    steps: list of dicts with keys:
+    steps: list of dicts — either plain steps or repeat groups.
+
+    Plain step:
       - name: str — step label (e.g. "10:00 Einfahren")
       - duration_minutes: float — step duration in minutes
       - power_low_w: int — lower power target in watts
       - power_high_w: int — upper power target in watts (0 = open-ended)
 
+    Repeat group:
+      - repeat: int — number of repetitions
+      - steps: list[dict] — sub-steps (same format as plain steps)
+
     Returns the new workout ID.
     """
     exercises = []
-    for i, step in enumerate(steps):
-        duration_s = int(step["duration_minutes"] * 60)
-        exercises.append({
-            "name": step["name"],
-            "exerciseType": 2,
-            "sportType": sport_type,
-            "intensityType": 6,           # power in watts
-            "intensityValue": step["power_low_w"],
-            "intensityValueExtend": step.get("power_high_w", 0),
-            "targetType": 2,              # time-based
-            "targetValue": duration_s,
-            "sets": 1,
-            "sortNo": 16777216 * (i + 1),
-            "restType": 3,
-            "restValue": 0,
-            "groupId": "0",
-            "isGroup": False,
-            "originId": "0",
-        })
+    top_index = 0  # counts top-level positions for sortNo
+    total_seconds = 0
+    ex_id = 0  # sequential exercise IDs (API uses these to link groups)
 
-    total_seconds = sum(int(s["duration_minutes"] * 60) for s in steps)
+    for step in steps:
+        if "repeat" in step:
+            # --- Repeat group ---
+            top_index += 1
+            ex_id += 1
+            group_sort = 16777216 * top_index
+            group_id = ex_id
+
+            sub_steps = step["steps"]
+            iteration_seconds = sum(
+                int(s["duration_minutes"] * 60) for s in sub_steps
+            )
+            total_seconds += iteration_seconds * step["repeat"]
+
+            # Group header exercise
+            exercises.append({
+                "id": group_id,
+                "name": "Group",
+                "exerciseType": 0,
+                "sportType": sport_type,
+                "intensityType": 0,
+                "intensityValue": 0,
+                "targetType": 2,
+                "targetValue": iteration_seconds,
+                "sets": step["repeat"],
+                "sortNo": group_sort,
+                "restType": 3,
+                "restValue": 0,
+                "groupId": "0",
+                "isGroup": True,
+                "originId": "0",
+            })
+
+            # Sub-step exercises
+            for j, sub in enumerate(sub_steps):
+                ex_id += 1
+                sub_duration = int(sub["duration_minutes"] * 60)
+                exercises.append({
+                    "id": ex_id,
+                    "name": sub["name"],
+                    "exerciseType": 2,
+                    "sportType": sport_type,
+                    "intensityType": 6,
+                    "intensityValue": sub["power_low_w"],
+                    "intensityValueExtend": sub.get("power_high_w", 0),
+                    "targetType": 2,
+                    "targetValue": sub_duration,
+                    "sets": 1,
+                    "sortNo": group_sort + 65536 * (j + 1),
+                    "restType": 3,
+                    "restValue": 0,
+                    "groupId": str(group_id),
+                    "isGroup": False,
+                    "originId": "0",
+                })
+        else:
+            # --- Plain step ---
+            top_index += 1
+            ex_id += 1
+            duration_s = int(step["duration_minutes"] * 60)
+            total_seconds += duration_s
+            exercises.append({
+                "id": ex_id,
+                "name": step["name"],
+                "exerciseType": 2,
+                "sportType": sport_type,
+                "intensityType": 6,
+                "intensityValue": step["power_low_w"],
+                "intensityValueExtend": step.get("power_high_w", 0),
+                "targetType": 2,
+                "targetValue": duration_s,
+                "sets": 1,
+                "sortNo": 16777216 * top_index,
+                "restType": 3,
+                "restValue": 0,
+                "groupId": "0",
+                "isGroup": False,
+                "originId": "0",
+            })
+
     payload = {
         "name": name,
         "sportType": sport_type,
