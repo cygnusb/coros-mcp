@@ -97,7 +97,9 @@ Run the following command in your terminal — **outside** of any Claude session
 coros-mcp auth
 ```
 
-You will be prompted for your email, password, and region (`eu`, `us`, or `asia`). This stores both the Training Hub web token and the mobile API token used for sleep data. Your credentials are sent directly to Coros and the token is stored securely in your system keyring (or an encrypted local file as fallback). **You only need to do this once** — the token persists across restarts.
+You will be prompted for your email, password, and region (`eu`, `us`, or `asia`). This stores the Training Hub web token. Your credentials are sent directly to Coros and the token is stored securely in your system keyring (or an encrypted local file as fallback). **You only need to do this once** — the token persists across restarts.
+
+> **Note:** `coros-mcp auth` does **not** obtain a mobile API token (used for sleep data), because the mobile login invalidates any existing mobile app session on your phone. The mobile token is obtained automatically when you first request sleep data, or you can run `coros-mcp auth-mobile` manually.
 
 **Other auth commands:**
 
@@ -196,7 +198,7 @@ Each record includes:
 | `max_hr` | Maximum heart rate during sleep |
 | `quality_score` | Sleep quality score (null if not computed) |
 
-> **Note:** Sleep data is fetched from the Coros mobile API (`apieu.coros.com`), which uses a separate token from the Training Hub web API. **No extra setup required** — `coros-mcp auth` obtains both tokens automatically using credentials encrypted with the same key as the official Coros app. The token expires after ~1 hour but **refreshes automatically** in the background.
+> **Note:** Sleep data is fetched from the Coros mobile API (`apieu.coros.com`), which uses a separate token from the Training Hub web API. The mobile token is **not** obtained during `coros-mcp auth` to avoid logging you out of the Coros mobile app. Instead, it is obtained automatically when you first request sleep data (which will log you out of the app). The token expires after ~1 hour but **refreshes automatically** on subsequent requests.
 
 ### `list_activities`
 

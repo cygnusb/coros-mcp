@@ -1049,7 +1049,8 @@ async def fetch_sleep(auth: StoredAuth, start_day: str, end_day: str) -> list[Sl
     if not auth.mobile_access_token:
         if not await _refresh_mobile_token(auth):
             raise ValueError(
-                "No mobile API token available. Run 'coros-mcp auth' to re-authenticate."
+                "No mobile API token available. Call authenticate_coros_mobile to get one. "
+                "Note: this will log you out of the Coros mobile app."
             )
 
     mobile_base = MOBILE_BASE_URLS.get(auth.region, MOBILE_BASE_URLS["eu"])
@@ -1076,7 +1077,7 @@ async def fetch_sleep(auth: StoredAuth, start_day: str, end_day: str) -> list[Sl
 
     body = await _do_request(auth.mobile_access_token)
 
-    if body.get("result") == "1019":  # token expired — try auto-refresh once
+    if body.get("result") == "1019":  # token expired — auto-refresh once
         if await _refresh_mobile_token(auth):
             body = await _do_request(auth.mobile_access_token)
 

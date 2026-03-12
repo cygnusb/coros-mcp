@@ -53,7 +53,7 @@ async def authenticate_coros(
     dict with keys: authenticated, user_id, region, message
     """
     try:
-        auth = await coros_api.login(email, password, region)
+        auth = await coros_api.login(email, password, region, skip_mobile=True)
         return {
             "authenticated": True,
             "user_id": auth.user_id,
