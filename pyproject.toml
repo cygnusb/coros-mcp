@@ -1,6 +1,6 @@
 [project]
 name = "coros-mcp"
-version = "0.1.0"
+version = "0.1"
 description = "MCP server for Coros sleep and HRV data"
 requires-python = ">=3.11"
 dependencies = [
