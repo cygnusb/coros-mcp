@@ -249,11 +249,11 @@ Create a new structured workout. Workouts appear in the Coros app and can be syn
   "name": "Sweet Spot 90min",
   "sport_type": 2,
   "steps": [
-    {"name": "15:00 Einfahren",  "duration_minutes": 15, "power_low_w": 148, "power_high_w": 192},
+    {"name": "15:00 Warmup",     "duration_minutes": 15, "power_low_w": 148, "power_high_w": 192},
     {"name": "20:00 Sweet Spot", "duration_minutes": 20, "power_low_w": 260, "power_high_w": 275},
-    {"name": "5:00 Pause",       "duration_minutes":  5, "power_low_w": 100, "power_high_w": 150},
+    {"name": "5:00 Rest",        "duration_minutes":  5, "power_low_w": 100, "power_high_w": 150},
     {"name": "20:00 Sweet Spot", "duration_minutes": 20, "power_low_w": 260, "power_high_w": 275},
-    {"name": "30:00 Ausfahren",  "duration_minutes": 30, "power_low_w": 100, "power_high_w": 192}
+    {"name": "30:00 Cooldown",   "duration_minutes": 30, "power_low_w": 100, "power_high_w": 192}
   ]
 }
 ```
@@ -262,15 +262,15 @@ Create a new structured workout. Workouts appear in the Coros app and can be syn
 
 ```json
 {
-  "name": "3×10min Sweetspot",
+  "name": "3×10min Sweet Spot",
   "sport_type": 2,
   "steps": [
-    {"name": "Einfahren", "duration_minutes": 10, "power_low_w": 150, "power_high_w": 200},
+    {"name": "Warmup",    "duration_minutes": 10, "power_low_w": 150, "power_high_w": 200},
     {"repeat": 3, "steps": [
-      {"name": "Sweetspot", "duration_minutes": 10, "power_low_w": 265, "power_high_w": 285},
-      {"name": "Erholung",  "duration_minutes":  3, "power_low_w": 150, "power_high_w": 175}
+      {"name": "Sweet Spot", "duration_minutes": 10, "power_low_w": 265, "power_high_w": 285},
+      {"name": "Recovery",   "duration_minutes":  3, "power_low_w": 150, "power_high_w": 175}
     ]},
-    {"name": "Ausfahren", "duration_minutes": 11, "power_low_w": 150, "power_high_w": 200}
+    {"name": "Cooldown",  "duration_minutes": 11, "power_low_w": 150, "power_high_w": 200}
   ]
 }
 ```
