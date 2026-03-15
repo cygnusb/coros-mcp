@@ -2,9 +2,30 @@
 import asyncio
 import getpass
 import sys
+import time
 
 from auth.storage import clear_token, get_token, is_keyring_available
-from coros_api import get_stored_auth, login, login_mobile
+from coros_api import TOKEN_TTL_MS, get_stored_auth, login, login_mobile
+
+
+def _prompt_credentials() -> tuple[str, str, str]:
+    """Prompt for email, password, and region. Returns (email, password, region)."""
+    email = input("Email: ").strip()
+    if not email:
+        print("Error: email is required.")
+        sys.exit(1)
+
+    password = getpass.getpass("Password: ")
+    if not password:
+        print("Error: password is required.")
+        sys.exit(1)
+
+    print()
+    print("Region options: eu, us, asia")
+    region = input("Region [eu]: ").strip().lower() or "eu"
+    if region not in ("eu", "us", "asia"):
+        print(f"Warning: unknown region '{region}', using it anyway.")
+    return email, password, region
 
 
 def cmd_auth() -> int:
@@ -18,22 +39,7 @@ def cmd_auth() -> int:
         print("System keyring not available — token will be stored in an encrypted local file.")
     print()
 
-    email = input("Email: ").strip()
-    if not email:
-        print("Error: email is required.")
-        return 1
-
-    password = getpass.getpass("Password: ")
-    if not password:
-        print("Error: password is required.")
-        return 1
-
-    print()
-    print("Region options: eu, us, asia")
-    region = input("Region [eu]: ").strip().lower() or "eu"
-    if region not in ("eu", "us", "asia"):
-        print(f"Warning: unknown region '{region}', using it anyway.")
-
+    email, password, region = _prompt_credentials()
     print()
     print("Authenticating…")
     try:
@@ -51,22 +57,7 @@ def cmd_auth_web() -> int:
     print("Coros MCP — Web API Authentication")
     print()
 
-    email = input("Email: ").strip()
-    if not email:
-        print("Error: email is required.")
-        return 1
-
-    password = getpass.getpass("Password: ")
-    if not password:
-        print("Error: password is required.")
-        return 1
-
-    print()
-    print("Region options: eu, us, asia")
-    region = input("Region [eu]: ").strip().lower() or "eu"
-    if region not in ("eu", "us", "asia"):
-        print(f"Warning: unknown region '{region}', using it anyway.")
-
+    email, password, region = _prompt_credentials()
     print()
     print("Authenticating (web only)…")
     try:
@@ -84,22 +75,7 @@ def cmd_auth_mobile() -> int:
     print("Coros MCP — Mobile API Authentication")
     print()
 
-    email = input("Email: ").strip()
-    if not email:
-        print("Error: email is required.")
-        return 1
-
-    password = getpass.getpass("Password: ")
-    if not password:
-        print("Error: password is required.")
-        return 1
-
-    print()
-    print("Region options: eu, us, asia")
-    region = input("Region [eu]: ").strip().lower() or "eu"
-    if region not in ("eu", "us", "asia"):
-        print(f"Warning: unknown region '{region}', using it anyway.")
-
+    email, password, region = _prompt_credentials()
     print()
     print("Authenticating (mobile only)…")
     try:
@@ -116,9 +92,7 @@ def cmd_auth_status() -> int:
     """Check whether valid tokens are stored."""
     auth = get_stored_auth()
     if auth:
-        import time
         age_ms = int(time.time() * 1000) - auth.timestamp
-        from coros_api import TOKEN_TTL_MS
         remaining_hours = round((TOKEN_TTL_MS - age_ms) / 3_600_000, 1)
 
         # Web token status
@@ -143,7 +117,6 @@ def cmd_auth_status() -> int:
         else:
             print("✗ Not authenticated. Run 'coros-mcp auth' to log in.")
         return 1
-
 
 
 def cmd_auth_clear() -> int:

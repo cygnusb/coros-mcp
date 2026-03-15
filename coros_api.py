@@ -6,6 +6,7 @@ HRV data comes from /dashboard/query (last 7 days of nightly RMSSD).
 Sleep phase data comes from the mobile API (/coros/data/statistic/daily on apieu.coros.com).
 """
 
+import asyncio
 import hashlib
 import json
 import random
@@ -61,6 +62,12 @@ MOBILE_BASE_URLS = {
 }
 
 TOKEN_TTL_MS = 24 * 60 * 60 * 1000  # 24 hours in milliseconds
+
+
+def _check_response(body: dict, context: str) -> None:
+    """Raise ValueError if the Coros API response indicates an error."""
+    if body.get("result") != "0000":
+        raise ValueError(f"Coros {context} error: {body.get('message', 'unknown error')}")
 
 
 # ---------------------------------------------------------------------------
@@ -156,8 +163,7 @@ async def _mobile_login(email: str, password: str, region: str = "eu") -> tuple[
         resp.raise_for_status()
         body = resp.json()
 
-    if body.get("result") != "0000":
-        raise ValueError(f"Coros mobile login failed: {body.get('message', 'unknown error')}")
+    _check_response(body, "mobile login")
 
     token = body.get("data", {}).get("accessToken")
     if not token:
@@ -198,8 +204,7 @@ async def login(email: str, password: str, region: str = "eu", *, skip_mobile: b
         resp.raise_for_status()
         body = resp.json()
 
-        if body.get("result") != "0000":
-            raise ValueError(f"Coros login failed: {body.get('message', 'unknown error')}")
+        _check_response(body, "login")
 
         data = body.get("data", {})
 
@@ -235,8 +240,10 @@ async def login_mobile(email: str, password: str, region: str = "eu") -> StoredA
 
     existing = _load_auth()
     if existing:
-        existing.mobile_access_token = mobile_token
-        existing.mobile_login_payload = mobile_payload
+        existing = existing.model_copy(update={
+            "mobile_access_token": mobile_token,
+            "mobile_login_payload": mobile_payload,
+        })
         _save_auth(existing)
         return existing
 
@@ -290,8 +297,7 @@ async def fetch_hrv(auth: StoredAuth) -> list[HRVRecord]:
         resp.raise_for_status()
         body = resp.json()
 
-    if body.get("result") != "0000":
-        raise ValueError(f"Coros dashboard API error: {body.get('message', 'unknown error')}")
+    _check_response(body, "dashboard")
 
     hrv_data = body.get("data", {}).get("summaryInfo", {}).get("sleepHrvData", {})
     records: list[HRVRecord] = []
@@ -361,25 +367,23 @@ async def fetch_daily_records(
     base = _base_url(auth.region)
 
     async with httpx.AsyncClient(timeout=30) as client:
-        detail_resp = await client.get(
-            base + ENDPOINTS["analyse_detail"],
-            params={"startDay": start_day, "endDay": end_day},
-            headers=headers,
+        detail_resp, analyse_resp = await asyncio.gather(
+            client.get(
+                base + ENDPOINTS["analyse_detail"],
+                params={"startDay": start_day, "endDay": end_day},
+                headers=headers,
+            ),
+            client.get(
+                base + ENDPOINTS["analyse"],
+                headers=headers,
+            ),
         )
-        detail_resp.raise_for_status()
-        detail_body = detail_resp.json()
+    detail_resp.raise_for_status()
+    detail_body = detail_resp.json()
+    analyse_resp.raise_for_status()
+    analyse_body = analyse_resp.json()
 
-        analyse_resp = await client.get(
-            base + ENDPOINTS["analyse"],
-            headers=headers,
-        )
-        analyse_resp.raise_for_status()
-        analyse_body = analyse_resp.json()
-
-    if detail_body.get("result") != "0000":
-        raise ValueError(
-            f"Coros analyse API error: {detail_body.get('message', 'unknown error')}"
-        )
+    _check_response(detail_body, "analyse")
 
     # Build records from dayDetail (long range)
     records_by_date: dict[str, DailyRecord] = {}
@@ -421,8 +425,8 @@ def _parse_activity(item: dict) -> ActivitySummary:
         name=item.get("name") or item.get("remark"),
         sport_type=sport_type,
         sport_name=SPORT_NAMES.get(sport_type, f"Sport {sport_type}") if sport_type else None,
-        start_time=str(item.get("startTime", "")) or None,
-        end_time=str(item.get("endTime", "")) or None,
+        start_time=str(item["startTime"]) if item.get("startTime") else None,
+        end_time=str(item["endTime"]) if item.get("endTime") else None,
         duration_seconds=item.get("totalTime"),
         distance_meters=item.get("totalDistance"),
         avg_hr=item.get("avgHr"),
@@ -465,8 +469,7 @@ async def fetch_activities(
         resp.raise_for_status()
         body = resp.json()
 
-    if body.get("result") != "0000":
-        raise ValueError(f"Coros activity API error: {body.get('message', 'unknown error')}")
+    _check_response(body, "activity list")
 
     data = body.get("data", {})
     items = data.get("dataList", data.get("list", []))
@@ -489,8 +492,7 @@ async def fetch_activity_detail(auth: StoredAuth, activity_id: str, sport_type: 
         resp.raise_for_status()
         body = resp.json()
 
-    if body.get("result") != "0000":
-        raise ValueError(f"Coros activity detail API error: {body.get('message', 'unknown error')}")
+    _check_response(body, "activity detail")
 
     data = body.get("data", {})
     # Strip large time-series arrays that bloat the response
@@ -548,8 +550,7 @@ async def fetch_workouts(auth: StoredAuth) -> list[dict]:
         resp.raise_for_status()
         body = resp.json()
 
-    if body.get("result") != "0000":
-        raise ValueError(f"Coros workout API error: {body.get('message', 'unknown error')}")
+    _check_response(body, "workout list")
 
     return [_parse_workout(w) for w in body.get("data", [])]
 
@@ -679,8 +680,7 @@ async def create_workout(
         resp.raise_for_status()
         body = resp.json()
 
-    if body.get("result") != "0000":
-        raise ValueError(f"Coros workout create error: {body.get('message', 'unknown error')}")
+    _check_response(body, "workout create")
 
     return str(body.get("data", ""))
 
@@ -696,8 +696,7 @@ async def delete_workout(auth: StoredAuth, workout_id: str) -> None:
         resp.raise_for_status()
         body = resp.json()
 
-    if body.get("result") != "0000":
-        raise ValueError(f"Coros workout delete error: {body.get('message', 'unknown error')}")
+    _check_response(body, "workout delete")
 
 
 # ---------------------------------------------------------------------------
@@ -728,22 +727,21 @@ async def fetch_schedule(
         resp.raise_for_status()
         body = resp.json()
 
-    if body.get("result") != "0000":
-        raise ValueError(f"Coros schedule API error: {body.get('message', 'unknown error')}")
+    _check_response(body, "schedule")
 
     return _strip_schedule(body.get("data") or {})
 
 
-_EXERCISE_DROP = {
+_EXERCISE_DROP = frozenset({
     "videoInfos", "videoUrl", "videoUrlArrStr", "coverUrlArrStr",
     "thumbnailUrl", "sourceUrl", "animationId",
     "access", "deleted", "defaultOrder", "status", "createTimestamp",
     "userId", "muscle", "muscleRelevance", "part", "equipment",
     "sortNo", "originId", "isDefaultAdd", "intensityCustom",
     "intensityDisplayUnit", "isIntensityPercent",
-}
+})
 
-_PROGRAM_DROP = {
+_PROGRAM_DROP = frozenset({
     "exerciseBarChart", "headPic", "profile", "sex", "star", "nickname",
     "essence", "originEssence", "access", "authorId", "deleted", "pbVersion",
     "version", "status", "createTimestamp", "thirdPartyId",
@@ -751,22 +749,26 @@ _PROGRAM_DROP = {
     "distanceDisplayUnit", "elevGain", "estimatedDistance", "estimatedTime",
     "estimatedType", "strengthType", "targetType", "targetValue",
     "planId", "planIdIndex", "userId",
-}
+})
 
-_ENTITY_DROP = {
+_ENTITY_DROP = frozenset({
     "exerciseBarChart", "completeRate", "score", "standardRate",
     "dayNo", "operateUserId", "thirdParty", "thirdPartyId",
     "sortNo", "sortNoInSchedule", "userId", "planId", "planIdIndex",
-}
+})
 
-_TOP_DROP = {
+_TOP_DROP = frozenset({
     "sportDatasInPlan", "sportDatasNotInPlan", "likeTpIds", "starTimestamp",
     "score", "sourceUrl", "inSchedule", "pauseInApp", "access", "authorId",
     "category", "pbVersion", "version", "thirdPartyId", "maxIdInPlan",
     "maxPlanProgramId", "weekStages", "subPlans", "userInfos",
     "type", "unit", "totalDay", "status", "startDay", "createTime",
     "updateTimestamp", "userId",
-}
+})
+
+
+def _drop_keys(d: dict, keys: frozenset) -> dict:
+    return {k: v for k, v in d.items() if k not in keys}
 
 
 def _readable_overview(overview: str) -> str:
@@ -779,26 +781,23 @@ def _readable_overview(overview: str) -> str:
 
 
 def _strip_exercise(ex: dict) -> dict:
-    out = {k: v for k, v in ex.items() if k not in _EXERCISE_DROP}
+    out = _drop_keys(ex, _EXERCISE_DROP)
     if "overview" in out:
         out["overview"] = _readable_overview(out["overview"])
     return out
 
 
 def _strip_program(prog: dict) -> dict:
-    out = {k: v for k, v in prog.items() if k not in _PROGRAM_DROP}
+    out = _drop_keys(prog, _PROGRAM_DROP)
     if "exercises" in out:
         out["exercises"] = [_strip_exercise(e) for e in out["exercises"]]
     return out
 
 
 def _strip_schedule(data: dict) -> dict:
-    out = {k: v for k, v in data.items() if k not in _TOP_DROP}
+    out = _drop_keys(data, _TOP_DROP)
     if "entities" in out:
-        out["entities"] = [
-            {k: v for k, v in e.items() if k not in _ENTITY_DROP}
-            for e in out["entities"]
-        ]
+        out["entities"] = [_drop_keys(e, _ENTITY_DROP) for e in out["entities"]]
     if "programs" in out:
         out["programs"] = [_strip_program(p) for p in out["programs"]]
     return out
@@ -927,8 +926,7 @@ async def create_strength_workout(
         resp.raise_for_status()
         body = resp.json()
 
-    if body.get("result") != "0000":
-        raise ValueError(f"Coros strength workout create error: {body.get('message', 'unknown error')}")
+    _check_response(body, "strength workout create")
 
     return str(body.get("data", ""))
 
@@ -1009,8 +1007,7 @@ async def schedule_workout(
         resp.raise_for_status()
         body = resp.json()
 
-    if body.get("result") != "0000":
-        raise ValueError(f"Coros schedule update error: {body.get('message', 'unknown error')}")
+    _check_response(body, "schedule update")
 
 
 async def remove_scheduled_workout(
@@ -1044,8 +1041,7 @@ async def remove_scheduled_workout(
         resp.raise_for_status()
         body = resp.json()
 
-    if body.get("result") != "0000":
-        raise ValueError(f"Coros schedule delete error: {body.get('message', 'unknown error')}")
+    _check_response(body, "schedule delete")
 
 
 async def fetch_exercises(auth: StoredAuth, sport_type: int) -> list[dict]:
@@ -1066,8 +1062,7 @@ async def fetch_exercises(auth: StoredAuth, sport_type: int) -> list[dict]:
         resp.raise_for_status()
         body = resp.json()
 
-    if body.get("result") != "0000":
-        raise ValueError(f"Coros exercise API error: {body.get('message', 'unknown error')}")
+    _check_response(body, "exercise list")
 
     return body.get("data", []) or []
 

@@ -13,16 +13,33 @@ MCP config (Claude Code):
 """
 
 import os
+import time
 from datetime import datetime, timedelta
 
 from dotenv import load_dotenv
 from fastmcp import FastMCP
 
 import coros_api
+from coros_api import TOKEN_TTL_MS
 
 load_dotenv()
 
 mcp = FastMCP("coros-mcp")
+
+
+def _summarize_steps(steps: list[dict]) -> tuple[float, int]:
+    """Return (total_minutes, steps_count) for a workout step list."""
+    total_minutes = 0.0
+    steps_count = 0
+    for s in steps:
+        if "repeat" in s:
+            sub_mins = sum(sub["duration_minutes"] for sub in s["steps"])
+            total_minutes += sub_mins * s["repeat"]
+            steps_count += 1 + len(s["steps"])
+        else:
+            total_minutes += s["duration_minutes"]
+            steps_count += 1
+    return total_minutes, steps_count
 
 
 # ---------------------------------------------------------------------------
@@ -134,9 +151,8 @@ async def check_coros_auth() -> dict:
             "message": "No valid token found. Call authenticate_coros first.",
         }
 
-    import time
     age_ms = int(time.time() * 1000) - auth.timestamp
-    remaining_ms = coros_api.TOKEN_TTL_MS - age_ms
+    remaining_ms = TOKEN_TTL_MS - age_ms
     remaining_hours = round(remaining_ms / 3_600_000, 1)
 
     has_mobile = bool(auth.mobile_access_token)
@@ -413,12 +429,12 @@ async def create_workout(
 
         Example:
           [
-            {"name": "Einfahren", "duration_minutes": 10, "power_low_w": 148, "power_high_w": 192},
+            {"name": "Warm-up", "duration_minutes": 10, "power_low_w": 148, "power_high_w": 192},
             {"repeat": 3, "steps": [
               {"name": "Sweetspot", "duration_minutes": 10, "power_low_w": 265, "power_high_w": 285},
-              {"name": "Erholung", "duration_minutes": 3, "power_low_w": 150, "power_high_w": 175},
+              {"name": "Recovery", "duration_minutes": 3, "power_low_w": 150, "power_high_w": 175},
             ]},
-            {"name": "Ausfahren", "duration_minutes": 10, "power_low_w": 100, "power_high_w": 165},
+            {"name": "Cool-down", "duration_minutes": 10, "power_low_w": 100, "power_high_w": 165},
           ]
     sport_type : int
         Sport type ID. Default 2 = Indoor Cycling (Rollen).
@@ -433,16 +449,7 @@ async def create_workout(
         return {"error": "Not authenticated."}
     try:
         workout_id = await coros_api.create_workout(auth, name, steps, sport_type)
-        total_minutes = 0
-        steps_count = 0
-        for s in steps:
-            if "repeat" in s:
-                sub_mins = sum(sub["duration_minutes"] for sub in s["steps"])
-                total_minutes += sub_mins * s["repeat"]
-                steps_count += 1 + len(s["steps"])
-            else:
-                total_minutes += s["duration_minutes"]
-                steps_count += 1
+        total_minutes, steps_count = _summarize_steps(steps)
         return {
             "workout_id": workout_id,
             "name": name,

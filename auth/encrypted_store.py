@@ -6,6 +6,7 @@ Uses AES-256-GCM with a machine-bound key.
 
 import base64
 import contextlib
+import functools
 import hashlib
 import os
 import platform
@@ -20,6 +21,7 @@ CONFIG_DIR = Path.home() / ".config" / "coros-mcp"
 CREDENTIALS_FILE = CONFIG_DIR / "auth.enc"
 
 
+@functools.lru_cache(maxsize=1)
 def _get_machine_id() -> bytes:
     components = [
         platform.node(),
@@ -75,20 +77,19 @@ def store_credential_encrypted(token: str) -> CredentialResult:
 
 
 def get_credential_encrypted() -> CredentialResult:
-    if not CREDENTIALS_FILE.exists():
-        return CredentialResult(success=False, message="No credential file found")
     try:
         data = base64.b64decode(CREDENTIALS_FILE.read_bytes())
         token = AESGCM(_derive_key()).decrypt(data[:12], data[12:], None).decode()
         return CredentialResult(success=True, message="Token retrieved", token=token)
+    except FileNotFoundError:
+        return CredentialResult(success=False, message="No credential file found")
     except Exception as e:
         return CredentialResult(success=False, message=f"Decryption error: {e}")
 
 
 def clear_credential_encrypted() -> CredentialResult:
     try:
-        if CREDENTIALS_FILE.exists():
-            CREDENTIALS_FILE.unlink()
+        CREDENTIALS_FILE.unlink(missing_ok=True)
         return CredentialResult(success=True, message="Credential file removed")
     except Exception as e:
         return CredentialResult(success=False, message=f"Error removing file: {e}")
