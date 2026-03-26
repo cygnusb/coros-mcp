@@ -9,6 +9,7 @@ Sleep phase data comes from the mobile API (/coros/data/statistic/daily on apieu
 import asyncio
 import hashlib
 import json
+import os
 import random
 import time
 from pathlib import Path
@@ -265,6 +266,28 @@ def get_stored_auth() -> Optional[StoredAuth]:
     if auth and _is_token_valid(auth):
         return auth
     return None
+
+
+def get_env_credentials() -> Optional[tuple[str, str, str]]:
+    """Return (email, password, region) from env vars, or None if not fully set."""
+    email = os.environ.get("COROS_EMAIL")
+    password = os.environ.get("COROS_PASSWORD")
+    region = os.environ.get("COROS_REGION", "eu")
+    if email and password:
+        return email, password, region
+    return None
+
+
+async def try_auto_login() -> Optional[StoredAuth]:
+    """Attempt login using COROS_EMAIL/PASSWORD env vars. Returns None on failure."""
+    creds = get_env_credentials()
+    if creds is None:
+        return None
+    email, password, region = creds
+    try:
+        return await login(email, password, region)
+    except Exception:
+        return None
 
 
 # ---------------------------------------------------------------------------

@@ -10,6 +10,11 @@ MCP config (Claude Code):
       -e COROS_PASSWORD=yourpass \\
       -e COROS_REGION=eu \\
       -- python /path/to/coros-mcp/server.py
+
+Alternatively, create a .env file in the project directory with the same
+variables. If COROS_EMAIL and COROS_PASSWORD are set (via env or .env), the
+server authenticates automatically on the first request and re-authenticates
+transparently whenever the stored token is expired or rejected.
 """
 
 import os
@@ -25,6 +30,25 @@ from coros_api import TOKEN_TTL_MS
 load_dotenv()
 
 mcp = FastMCP("coros-mcp")
+
+
+async def _get_auth():
+    """Return stored auth, auto-logging in from env vars if the token is missing/expired."""
+    auth = coros_api.get_stored_auth()
+    if auth is None:
+        auth = await coros_api.try_auto_login()
+    return auth
+
+
+async def _run_with_auth(fn, auth, *args, **kwargs):
+    """Call fn(auth, …). On exception, re-login from env vars and retry once."""
+    try:
+        return await fn(auth, *args, **kwargs)
+    except Exception:
+        new_auth = await coros_api.try_auto_login()
+        if new_auth is None:
+            raise
+        return await fn(new_auth, *args, **kwargs)
 
 
 def _summarize_steps(steps: list[dict]) -> tuple[float, int]:
@@ -212,10 +236,10 @@ async def get_daily_metrics(weeks: int = 4) -> dict:
       - stamina_level: base fitness level
       - stamina_level_7d: 7-day fitness trend
     """
-    auth = coros_api.get_stored_auth()
+    auth = await _get_auth()
     if auth is None:
         return {
-            "error": "Not authenticated. Call authenticate_coros first.",
+            "error": "Not authenticated. Set COROS_EMAIL and COROS_PASSWORD in .env or call authenticate_coros.",
             "records": [],
         }
 
@@ -226,7 +250,7 @@ async def get_daily_metrics(weeks: int = 4) -> dict:
     end_day = end_dt.strftime("%Y%m%d")
 
     try:
-        records = await coros_api.fetch_daily_records(auth, start_day, end_day)
+        records = await _run_with_auth(coros_api.fetch_daily_records, auth, start_day, end_day)
         return {
             "records": [r.model_dump() for r in records],
             "count": len(records),
@@ -270,9 +294,9 @@ async def get_sleep_data(weeks: int = 4) -> dict:
       - max_hr: maximum heart rate during sleep
       - quality_score: sleep quality score (null if not computed)
     """
-    auth = coros_api.get_stored_auth()
+    auth = await _get_auth()
     if auth is None:
-        return {"error": "Not authenticated. Call authenticate_coros first.", "records": []}
+        return {"error": "Not authenticated. Set COROS_EMAIL and COROS_PASSWORD in .env or call authenticate_coros.", "records": []}
 
     weeks = max(1, min(weeks, 52))
     end_dt = datetime.now()
@@ -281,7 +305,7 @@ async def get_sleep_data(weeks: int = 4) -> dict:
     end_day = end_dt.strftime("%Y%m%d")
 
     try:
-        records = await coros_api.fetch_sleep(auth, start_day, end_day)
+        records = await _run_with_auth(coros_api.fetch_sleep, auth, start_day, end_day)
         return {
             "records": [r.model_dump() for r in records],
             "count": len(records),
@@ -323,11 +347,11 @@ async def list_activities(
     start_time, end_time, duration_seconds, distance_meters, avg_hr, max_hr,
     calories, training_load, avg_power, normalized_power, elevation_gain
     """
-    auth = coros_api.get_stored_auth()
+    auth = await _get_auth()
     if auth is None:
-        return {"error": "Not authenticated.", "activities": []}
+        return {"error": "Not authenticated. Set COROS_EMAIL and COROS_PASSWORD in .env or call authenticate_coros.", "activities": []}
     try:
-        activities, total = await coros_api.fetch_activities(auth, start_day, end_day, page, size)
+        activities, total = await _run_with_auth(coros_api.fetch_activities, auth, start_day, end_day, page, size)
         return {
             "activities": [a.model_dump() for a in activities],
             "total_count": total,
@@ -359,11 +383,11 @@ async def get_activity_detail(activity_id: str, sport_type: int = 0) -> dict:
     dict with full activity data including laps, HR zones, power metrics,
     elevation, and all available sport-specific fields.
     """
-    auth = coros_api.get_stored_auth()
+    auth = await _get_auth()
     if auth is None:
-        return {"error": "Not authenticated."}
+        return {"error": "Not authenticated. Set COROS_EMAIL and COROS_PASSWORD in .env or call authenticate_coros."}
     try:
-        return await coros_api.fetch_activity_detail(auth, activity_id, sport_type)
+        return await _run_with_auth(coros_api.fetch_activity_detail, auth, activity_id, sport_type)
     except Exception as exc:
         return {"error": str(exc)}
 
@@ -384,11 +408,11 @@ async def list_workouts() -> dict:
     estimated_time_seconds, exercise_count, exercises (list of steps with
     name, duration_seconds, power_low_w, power_high_w)
     """
-    auth = coros_api.get_stored_auth()
+    auth = await _get_auth()
     if auth is None:
-        return {"error": "Not authenticated.", "workouts": []}
+        return {"error": "Not authenticated. Set COROS_EMAIL and COROS_PASSWORD in .env or call authenticate_coros.", "workouts": []}
     try:
-        workouts = await coros_api.fetch_workouts(auth)
+        workouts = await _run_with_auth(coros_api.fetch_workouts, auth)
         return {"workouts": workouts, "count": len(workouts)}
     except Exception as exc:
         return {"error": str(exc), "workouts": []}
@@ -444,11 +468,11 @@ async def create_workout(
     -------
     dict with keys: workout_id, name, total_minutes, steps_count, message
     """
-    auth = coros_api.get_stored_auth()
+    auth = await _get_auth()
     if auth is None:
-        return {"error": "Not authenticated."}
+        return {"error": "Not authenticated. Set COROS_EMAIL and COROS_PASSWORD in .env or call authenticate_coros."}
     try:
-        workout_id = await coros_api.create_workout(auth, name, steps, sport_type)
+        workout_id = await _run_with_auth(coros_api.create_workout, auth, name, steps, sport_type)
         total_minutes, steps_count = _summarize_steps(steps)
         return {
             "workout_id": workout_id,
@@ -481,11 +505,11 @@ async def delete_workout(
     -------
     dict with keys: deleted, workout_id, message
     """
-    auth = coros_api.get_stored_auth()
+    auth = await _get_auth()
     if auth is None:
-        return {"error": "Not authenticated."}
+        return {"error": "Not authenticated. Set COROS_EMAIL and COROS_PASSWORD in .env or call authenticate_coros."}
     try:
-        await coros_api.delete_workout(auth, workout_id)
+        await _run_with_auth(coros_api.delete_workout, auth, workout_id)
         return {
             "deleted": True,
             "workout_id": workout_id,
@@ -518,11 +542,11 @@ async def list_planned_activities(
     -------
     dict with keys: activities (list of raw scheduled items), count, date_range
     """
-    auth = coros_api.get_stored_auth()
+    auth = await _get_auth()
     if auth is None:
-        return {"error": "Not authenticated. Call authenticate_coros first.", "activities": []}
+        return {"error": "Not authenticated. Set COROS_EMAIL and COROS_PASSWORD in .env or call authenticate_coros.", "activities": []}
     try:
-        items = await coros_api.fetch_schedule(auth, start_day, end_day)
+        items = await _run_with_auth(coros_api.fetch_schedule, auth, start_day, end_day)
         return {
             "activities": items,
             "count": len(items),
@@ -558,11 +582,11 @@ async def schedule_workout(
     -------
     dict with keys: scheduled, workout_id, happen_day
     """
-    auth = coros_api.get_stored_auth()
+    auth = await _get_auth()
     if auth is None:
-        return {"error": "Not authenticated."}
+        return {"error": "Not authenticated. Set COROS_EMAIL and COROS_PASSWORD in .env or call authenticate_coros."}
     try:
-        await coros_api.schedule_workout(auth, workout_id, happen_day, sort_no)
+        await _run_with_auth(coros_api.schedule_workout, auth, workout_id, happen_day, sort_no)
         return {"scheduled": True, "workout_id": workout_id, "happen_day": happen_day}
     except Exception as exc:
         return {"error": str(exc), "scheduled": False}
@@ -594,12 +618,12 @@ async def remove_scheduled_workout(
     -------
     dict with keys: removed, plan_id, id_in_plan
     """
-    auth = coros_api.get_stored_auth()
+    auth = await _get_auth()
     if auth is None:
-        return {"error": "Not authenticated."}
+        return {"error": "Not authenticated. Set COROS_EMAIL and COROS_PASSWORD in .env or call authenticate_coros."}
     try:
-        await coros_api.remove_scheduled_workout(
-            auth, plan_id, id_in_plan, plan_program_id or None
+        await _run_with_auth(
+            coros_api.remove_scheduled_workout, auth, plan_id, id_in_plan, plan_program_id or None
         )
         return {"removed": True, "plan_id": plan_id, "id_in_plan": id_in_plan}
     except Exception as exc:
@@ -637,11 +661,11 @@ async def create_strength_workout(
     -------
     dict with keys: workout_id, name, sets, exercise_count
     """
-    auth = coros_api.get_stored_auth()
+    auth = await _get_auth()
     if auth is None:
-        return {"error": "Not authenticated."}
+        return {"error": "Not authenticated. Set COROS_EMAIL and COROS_PASSWORD in .env or call authenticate_coros."}
     try:
-        workout_id = await coros_api.create_strength_workout(auth, name, exercises, sets)
+        workout_id = await _run_with_auth(coros_api.create_strength_workout, auth, name, exercises, sets)
         return {
             "workout_id": workout_id,
             "name": name,
@@ -673,11 +697,11 @@ async def list_exercises(sport_type: int = 4) -> dict:
     -------
     dict with keys: exercises (list), count, sport_type
     """
-    auth = coros_api.get_stored_auth()
+    auth = await _get_auth()
     if auth is None:
-        return {"error": "Not authenticated.", "exercises": []}
+        return {"error": "Not authenticated. Set COROS_EMAIL and COROS_PASSWORD in .env or call authenticate_coros.", "exercises": []}
     try:
-        items = await coros_api.fetch_exercises(auth, sport_type)
+        items = await _run_with_auth(coros_api.fetch_exercises, auth, sport_type)
         return {"exercises": items, "count": len(items), "sport_type": sport_type}
     except Exception as exc:
         return {"error": str(exc), "exercises": []}
