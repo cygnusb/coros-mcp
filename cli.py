@@ -43,7 +43,7 @@ def cmd_auth() -> int:
     print()
     print("Authenticating…")
     try:
-        auth = asyncio.run(login(email, password, region))
+        auth = asyncio.run(login(email, password, region, skip_mobile=False))
         print(f"✓ Authenticated as user {auth.user_id} (region: {auth.region})")
         print("  Token stored securely. You only need to do this once.")
         return 0

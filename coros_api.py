@@ -54,12 +54,16 @@ ENDPOINTS = {
 BASE_URLS = {
     "eu": "https://teameuapi.coros.com",
     "us": "https://teamapi.coros.com",
+    "asia": "https://teamcnapi.coros.com",
+    "cn": "https://teamcnapi.coros.com",
 }
 
 # Mobile app API — used for sleep data (different host from Training Hub web API)
 MOBILE_BASE_URLS = {
     "eu": "https://apieu.coros.com",
     "us": "https://apius.coros.com",
+    "asia": "https://apicn.coros.com",
+    "cn": "https://apicn.coros.com",
 }
 
 TOKEN_TTL_MS = 24 * 60 * 60 * 1000  # 24 hours in milliseconds
@@ -185,7 +189,7 @@ def _base_url(region: str) -> str:
     return BASE_URLS.get(region, BASE_URLS["eu"])
 
 
-async def login(email: str, password: str, region: str = "eu", *, skip_mobile: bool = False) -> StoredAuth:
+async def login(email: str, password: str, region: str = "eu", *, skip_mobile: bool = True) -> StoredAuth:
     """Authenticate against Coros API and persist the token."""
     pwd_hash = _md5(password)
     login_payload = {
@@ -279,13 +283,18 @@ def get_env_credentials() -> Optional[tuple[str, str, str]]:
 
 
 async def try_auto_login() -> Optional[StoredAuth]:
-    """Attempt login using COROS_EMAIL/PASSWORD env vars. Returns None on failure."""
+    """Attempt login using COROS_EMAIL/PASSWORD env vars. Returns None on failure.
+
+    Always skips mobile login — the mobile token is obtained lazily on the first
+    call to fetch_sleep(), so the Coros mobile app session is never disrupted by
+    routine web-token refreshes.
+    """
     creds = get_env_credentials()
     if creds is None:
         return None
     email, password, region = creds
     try:
-        return await login(email, password, region)
+        return await login(email, password, region)  # skip_mobile=True by default
     except Exception:
         return None
 
@@ -1136,6 +1145,44 @@ async def _refresh_mobile_token(auth: StoredAuth) -> bool:
 
 
 # ---------------------------------------------------------------------------
+# Mobile token — lazy acquisition and refresh
+# ---------------------------------------------------------------------------
+
+async def _ensure_mobile_token(auth: StoredAuth) -> bool:
+    """Ensure auth has a valid mobile access token, acquiring one on-demand if needed.
+
+    Resolution order:
+    1. Token already present — nothing to do.
+    2. Replay payload stored — try refresh (re-sends the encrypted login payload).
+    3. Env credentials available — perform a fresh mobile login.
+
+    Mobile login is deferred until the first call to fetch_sleep() so that
+    normal web-token refreshes never disrupt the Coros mobile app session.
+    """
+    if auth.mobile_access_token:
+        return True
+
+    # Try refreshing via the stored encrypted payload (avoids re-entering creds)
+    if auth.mobile_login_payload:
+        if await _refresh_mobile_token(auth):
+            return True
+
+    # Fall back to a fresh mobile login using env credentials
+    creds = get_env_credentials()
+    if creds is None:
+        return False
+    email, password, region = creds
+    try:
+        mobile_token, mobile_payload = await _mobile_login(email, password, region)
+        auth.mobile_access_token = mobile_token
+        auth.mobile_login_payload = mobile_payload
+        _save_auth(auth)
+        return True
+    except Exception:
+        return False
+
+
+# ---------------------------------------------------------------------------
 # Sleep data  (mobile API: apieu.coros.com/coros/data/statistic/daily)
 # ---------------------------------------------------------------------------
 
@@ -1149,12 +1196,11 @@ async def fetch_sleep(auth: StoredAuth, start_day: str, end_day: str) -> list[Sl
 
     start_day / end_day: YYYYMMDD strings.
     """
-    if not auth.mobile_access_token:
-        if not await _refresh_mobile_token(auth):
-            raise ValueError(
-                "No mobile API token available. Call authenticate_coros_mobile to get one. "
-                "Note: this will log you out of the Coros mobile app."
-            )
+    if not await _ensure_mobile_token(auth):
+        raise ValueError(
+            "No mobile API token available. Set COROS_EMAIL and COROS_PASSWORD in .env "
+            "for automatic acquisition, or run: coros-mcp auth-mobile"
+        )
 
     mobile_base = MOBILE_BASE_URLS.get(auth.region, MOBILE_BASE_URLS["eu"])
     url = mobile_base + ENDPOINTS["sleep"]
