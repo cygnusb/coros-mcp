@@ -265,7 +265,25 @@ async def login_mobile(email: str, password: str, region: str = "eu") -> StoredA
 
 
 def get_stored_auth() -> Optional[StoredAuth]:
-    """Return stored auth if it exists and is not expired."""
+    """Return stored auth if it exists and is not expired.
+    
+    When COROS_ACCESS_TOKEN env var is set, it takes precedence over
+    stored keyring/encrypted-file auth (for MCP server use cases where
+    keyring is not accessible in the subprocess).
+    """
+    # Prefer explicit env var token when provided
+    access_token = os.environ.get("COROS_ACCESS_TOKEN")
+    if access_token:
+        region = os.environ.get("COROS_REGION", "eu")
+        return StoredAuth(
+            access_token=access_token,
+            user_id="env",
+            region=region,
+            timestamp=int(time.time() * 1000),
+            mobile_access_token=None,
+            mobile_login_payload=None,
+        )
+    # Fall back to stored auth
     auth = _load_auth()
     if auth and _is_token_valid(auth):
         return auth

@@ -35,18 +35,23 @@ def store_token(token: str) -> CredentialResult:
 def get_token() -> CredentialResult:
     """Retrieve the Coros access token.
 
-    Priority: env var → keyring → encrypted file.
+    Priority: env var → encrypted file → keyring.
+    Encrypted file is checked first because keyring may hang in subprocess
+    environments (e.g. MCP server launched by Claude Code / OpenClaw) where
+    macOS Keychain requires interactive unlock.
     """
     env = os.environ.get(ENV_VAR)
     if env:
         return CredentialResult(success=True, message="Token from env var", token=env)
 
-    if is_keyring_available():
-        result = _keyring_get()
-        if result.success:
-            return result
+    result = get_credential_encrypted()
+    if result.success:
+        return result
 
-    return get_credential_encrypted()
+    if is_keyring_available():
+        return _keyring_get()
+
+    return result
 
 
 def clear_token() -> CredentialResult:
