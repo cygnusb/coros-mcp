@@ -523,7 +523,7 @@ async def fetch_activities(
 
     data = body.get("data", {})
     items = data.get("dataList", data.get("list", []))
-    total = data.get("totalCount", len(items))
+    total = data.get("totalCount") or data.get("count") or len(items)
     return [_parse_activity(i) for i in items], total
 
 
