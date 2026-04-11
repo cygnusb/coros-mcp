@@ -722,20 +722,27 @@ async def list_exercises(sport_type: int = 4) -> dict:
 # ---------------------------------------------------------------------------
 
 @mcp.tool()
-async def sync_coros_data(start_day: str = "") -> dict:
+async def sync_coros_data(start_day: str = "", end_day: str = "") -> dict:
     """
-    Full historical sync: pull all Coros data from start_day to today and
-    store it in the local SQLite cache (~/.config/coros-mcp/cache.db).
+    Sync Coros data for a date range into the local SQLite cache.
 
-    After the first sync, subsequent calls to get_daily_metrics, get_sleep_data,
-    and list_activities will serve historical data from cache and only fetch
-    the incremental tail from the API.
+    After the first full sync, subsequent calls to get_daily_metrics,
+    get_sleep_data, and list_activities will serve historical data from
+    cache and only fetch the incremental tail from the API.
+
+    For large date ranges (> 6 months), call this tool in segments to
+    avoid timeout (e.g. one segment per year). For the initial full
+    historical backfill, use the CLI instead:
+        coros-mcp sync --from 20230101
 
     Parameters
     ----------
     start_day : str
-        Earliest date to sync in YYYYMMDD format.
+        Start of sync range in YYYYMMDD format.
         Defaults to two years ago if omitted.
+    end_day : str
+        End of sync range in YYYYMMDD format.
+        Defaults to today if omitted.
 
     Returns
     -------
@@ -746,12 +753,14 @@ async def sync_coros_data(start_day: str = "") -> dict:
     if auth is None:
         return {"error": "Not authenticated. Set COROS_EMAIL and COROS_PASSWORD or call authenticate_coros."}
 
+    from datetime import datetime, timedelta
     if not start_day:
-        from datetime import datetime, timedelta
         start_day = (datetime.now() - timedelta(days=730)).strftime("%Y%m%d")
+    if not end_day:
+        end_day = datetime.now().strftime("%Y%m%d")
 
     try:
-        return await _sync_all(auth, start_day)
+        return await _sync_all(auth, start_day, end_day=end_day)
     except Exception as exc:
         return {"error": str(exc)}
 

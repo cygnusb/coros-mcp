@@ -131,10 +131,11 @@ async def _fetch_all_activity_pages(
 async def sync_all(
     auth: StoredAuth,
     start_day: str,
+    end_day: Optional[str] = None,
     on_progress: Optional[Callable[[str], Coroutine]] = None,
 ) -> dict:
     """
-    Backfill all data from start_day to today in 12-week chunks.
+    Backfill all data from start_day to end_day (default: today) in 12-week chunks.
 
     Overwrites any existing cache entries for the covered period so that
     corrected data from the Coros API always wins.
@@ -142,7 +143,8 @@ async def sync_all(
     Parameters
     ----------
     auth       : valid StoredAuth
-    start_day  : YYYYMMDD — how far back to go (e.g. "20230101")
+    start_day  : YYYYMMDD — start of range (e.g. "20230101")
+    end_day    : YYYYMMDD — end of range, defaults to today
     on_progress: optional async callable(msg: str) for progress updates
 
     Returns dict with sync statistics and final cache status.
@@ -151,6 +153,7 @@ async def sync_all(
     today = _today()
     chunk_days = 12 * 7  # 12 weeks — within the API's 24-week dayDetail limit
 
+    stop = end_day if end_day else today
     stats: dict = {"daily": 0, "sleep": 0, "activities": 0, "errors": []}
 
     async def _progress(msg: str) -> None:
@@ -158,8 +161,8 @@ async def sync_all(
             await on_progress(msg)
 
     cursor = start_day
-    while cursor <= today:
-        chunk_end = min(_date_add(cursor, chunk_days - 1), today)
+    while cursor <= stop:
+        chunk_end = min(_date_add(cursor, chunk_days - 1), stop)
         await _progress(f"syncing {cursor} → {chunk_end}")
 
         # --- daily records ---

@@ -4,8 +4,11 @@ import getpass
 import sys
 import time
 
+from dotenv import load_dotenv
+load_dotenv()
+
 from auth.storage import clear_token, get_token, is_keyring_available
-from coros_api import TOKEN_TTL_MS, get_stored_auth, login, login_mobile
+from coros_api import TOKEN_TTL_MS, get_stored_auth, try_auto_login, login, login_mobile
 
 
 def _prompt_credentials() -> tuple[str, str, str]:
@@ -91,6 +94,8 @@ def cmd_auth_mobile() -> int:
 def cmd_auth_status() -> int:
     """Check whether valid tokens are stored."""
     auth = get_stored_auth()
+    if auth is None:
+        auth = asyncio.run(try_auto_login())
     if auth:
         age_ms = int(time.time() * 1000) - auth.timestamp
         remaining_hours = round((TOKEN_TTL_MS - age_ms) / 3_600_000, 1)
@@ -138,22 +143,34 @@ def cmd_sync() -> int:
 
     auth = get_stored_auth()
     if auth is None:
-        print("✗ Not authenticated. Run 'coros-mcp auth' first.")
+        auth = asyncio.run(try_auto_login())
+    if auth is None:
+        print("✗ Not authenticated. Set COROS_EMAIL and COROS_PASSWORD in .env, or run 'coros-mcp auth'.")
         return 1
 
-    # Parse optional --from flag
+    # Parse optional --from / --to flags
     start_day = None
+    end_day = None
     args = sys.argv[2:]
-    if args and args[0] == "--from" and len(args) >= 2:
-        start_day = args[1]
-    elif args and args[0].startswith("--from="):
-        start_day = args[0].split("=", 1)[1]
+    i = 0
+    while i < len(args):
+        if args[i] == "--from" and i + 1 < len(args):
+            start_day = args[i + 1]; i += 2
+        elif args[i].startswith("--from="):
+            start_day = args[i].split("=", 1)[1]; i += 1
+        elif args[i] == "--to" and i + 1 < len(args):
+            end_day = args[i + 1]; i += 2
+        elif args[i].startswith("--to="):
+            end_day = args[i].split("=", 1)[1]; i += 1
+        else:
+            i += 1
 
+    from datetime import datetime, timedelta
     if not start_day:
-        from datetime import datetime, timedelta
         start_day = (datetime.now() - timedelta(days=730)).strftime("%Y%m%d")
 
-    print(f"Coros MCP — Full Historical Sync (from {start_day})")
+    range_str = f"{start_day} → {end_day}" if end_day else f"{start_day} → today"
+    print(f"Coros MCP — Sync ({range_str})")
     print("This may take a few minutes for a large date range.")
     print()
 
@@ -161,7 +178,7 @@ def cmd_sync() -> int:
         async def on_progress(msg: str):
             print(f"  {msg}")
 
-        return await sync_all(auth, start_day, on_progress=on_progress)
+        return await sync_all(auth, start_day, end_day=end_day, on_progress=on_progress)
 
     try:
         stats = asyncio.run(_run())
@@ -220,7 +237,7 @@ Usage:
   coros-mcp auth-mobile             Authenticate mobile API only (sleep data)
   coros-mcp auth-status             Check status of both tokens
   coros-mcp auth-clear              Remove stored token
-  coros-mcp sync [--from YYYYMMDD]  Full historical sync to local cache (default: 2 years)
+  coros-mcp sync [--from YYYYMMDD] [--to YYYYMMDD]  Sync to local cache (default: 2 years → today)
   coros-mcp cache-status            Show local cache coverage
   coros-mcp help                    Show this help message
 """
