@@ -130,6 +130,78 @@ def cmd_auth_clear() -> int:
         return 1
 
 
+def cmd_sync() -> int:
+    """Full historical sync: pull all data from Coros and store locally."""
+    import asyncio
+    from cache.sync import sync_all
+    from cache.store import cache_status
+
+    auth = get_stored_auth()
+    if auth is None:
+        print("✗ Not authenticated. Run 'coros-mcp auth' first.")
+        return 1
+
+    # Parse optional --from flag
+    start_day = None
+    args = sys.argv[2:]
+    if args and args[0] == "--from" and len(args) >= 2:
+        start_day = args[1]
+    elif args and args[0].startswith("--from="):
+        start_day = args[0].split("=", 1)[1]
+
+    if not start_day:
+        from datetime import datetime, timedelta
+        start_day = (datetime.now() - timedelta(days=730)).strftime("%Y%m%d")
+
+    print(f"Coros MCP — Full Historical Sync (from {start_day})")
+    print("This may take a few minutes for a large date range.")
+    print()
+
+    async def _run():
+        async def on_progress(msg: str):
+            print(f"  {msg}")
+
+        return await sync_all(auth, start_day, on_progress=on_progress)
+
+    try:
+        stats = asyncio.run(_run())
+        print()
+        print(f"✓ Sync complete")
+        print(f"  Daily records : {stats['daily']}")
+        print(f"  Sleep records : {stats['sleep']}")
+        print(f"  Activities    : {stats['activities']}")
+        if stats["errors"]:
+            print(f"  Errors        : {len(stats['errors'])}")
+            for e in stats["errors"]:
+                print(f"    - {e}")
+        c = stats.get("cache", {})
+        print()
+        print("Cache coverage:")
+        for key in ("daily_records", "sleep_records", "activities"):
+            s = c.get(key, {})
+            print(f"  {key:16s}: {s.get('count', 0)} records  [{s.get('from', '—')} → {s.get('to', '—')}]")
+        return 0
+    except Exception as e:
+        print(f"✗ Sync failed: {e}")
+        return 1
+
+
+def cmd_cache_status() -> int:
+    """Show local cache coverage."""
+    from cache.store import cache_status, init_db
+    init_db()
+    c = cache_status()
+    print(f"Cache: {c['db_path']}")
+    print()
+    for key in ("daily_records", "sleep_records", "activities"):
+        s = c[key]
+        if s["count"]:
+            print(f"  {key:16s}: {s['count']:5d} records  [{s['from']} → {s['to']}]")
+        else:
+            print(f"  {key:16s}:     0 records  (empty — run 'coros-mcp sync')")
+    return 0
+
+
 def cmd_serve() -> int:
     """Start the MCP server (stdio mode)."""
     import server
@@ -142,13 +214,15 @@ def cmd_help() -> int:
         """Coros MCP Server — CLI
 
 Usage:
-  coros-mcp serve         Start the MCP server (used by Claude Code)
-  coros-mcp auth          Authenticate with your Coros account (web + mobile)
-  coros-mcp auth-web      Authenticate web API only (no sleep data)
-  coros-mcp auth-mobile   Authenticate mobile API only (sleep data)
-  coros-mcp auth-status   Check status of both tokens
-  coros-mcp auth-clear    Remove stored token
-  coros-mcp help          Show this help message
+  coros-mcp serve                   Start the MCP server (used by Claude Code / OpenClaw)
+  coros-mcp auth                    Authenticate with your Coros account (web + mobile)
+  coros-mcp auth-web                Authenticate web API only (no sleep data)
+  coros-mcp auth-mobile             Authenticate mobile API only (sleep data)
+  coros-mcp auth-status             Check status of both tokens
+  coros-mcp auth-clear              Remove stored token
+  coros-mcp sync [--from YYYYMMDD]  Full historical sync to local cache (default: 2 years)
+  coros-mcp cache-status            Show local cache coverage
+  coros-mcp help                    Show this help message
 """
     )
     return 0
@@ -163,6 +237,8 @@ def main() -> None:
         "auth-mobile": cmd_auth_mobile,
         "auth-status": cmd_auth_status,
         "auth-clear": cmd_auth_clear,
+        "sync": cmd_sync,
+        "cache-status": cmd_cache_status,
         "help": cmd_help,
         "--help": cmd_help,
         "-h": cmd_help,
