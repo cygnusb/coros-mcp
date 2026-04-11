@@ -213,15 +213,17 @@ async def check_coros_auth() -> dict:
 async def get_daily_metrics(weeks: int = 4) -> dict:
     """
     Retrieve nightly HRV and daily metrics from Coros for a configurable
-    time range (up to 24 weeks).
+    time range (up to 52 weeks).
 
-    Uses the /analyse/dayDetail/query endpoint which returns daily records
-    including HRV, resting heart rate, training load, and fatigue rate.
+    Historical data is served from the local SQLite cache (fast); only the
+    uncached tail is fetched from the Coros API. The underlying API endpoint
+    supports up to 24 weeks per call, but the cache layer handles longer
+    ranges transparently by reading stored records directly.
 
     Parameters
     ----------
     weeks : int
-        Number of weeks to fetch (1–24). Default: 4.
+        Number of weeks to fetch (1–52). Default: 4.
 
     Returns
     -------
@@ -251,7 +253,7 @@ async def get_daily_metrics(weeks: int = 4) -> dict:
             "records": [],
         }
 
-    weeks = max(1, min(weeks, 24))
+    weeks = max(1, min(weeks, 52))
     end_dt = datetime.now()
     start_dt = end_dt - timedelta(weeks=weeks)
     start_day = start_dt.strftime("%Y%m%d")
