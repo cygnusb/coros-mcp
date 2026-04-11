@@ -133,9 +133,12 @@ def _activity_start_day(a: ActivitySummary) -> str:
     if not a.start_time:
         return ""
     s = a.start_time
-    # Unix timestamp in milliseconds (13 digits)
-    if len(s) == 13 and s.isdigit():
-        return datetime.fromtimestamp(int(s) / 1000).strftime("%Y%m%d")
+    # Unix timestamp (10 digits = seconds, 13 digits = milliseconds)
+    if s.isdigit():
+        if len(s) == 13:  # milliseconds
+            return datetime.fromtimestamp(int(s) / 1000).strftime("%Y%m%d")
+        if len(s) == 10:  # seconds
+            return datetime.fromtimestamp(int(s)).strftime("%Y%m%d")
     # YYYYMMDDHHMMSS or just YYYYMMDD
     if len(s) >= 8 and s[:8].isdigit():
         return s[:8]
