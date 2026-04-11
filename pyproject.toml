@@ -22,4 +22,4 @@ coros-mcp = "cli:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["."]
-include = ["*.py", "auth/*.py"]
+include = ["*.py", "auth/*.py", "cache/*.py"]
