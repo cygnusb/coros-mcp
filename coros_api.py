@@ -54,12 +54,16 @@ ENDPOINTS = {
 BASE_URLS = {
     "eu": "https://teameuapi.coros.com",
     "us": "https://teamapi.coros.com",
+    "asia": "https://teamcnapi.coros.com",
+    "cn": "https://teamcnapi.coros.com",
 }
 
 # Mobile app API — used for sleep data (different host from Training Hub web API)
 MOBILE_BASE_URLS = {
     "eu": "https://apieu.coros.com",
     "us": "https://apius.coros.com",
+    "asia": "https://apicn.coros.com",
+    "cn": "https://apicn.coros.com",
 }
 
 TOKEN_TTL_MS = 24 * 60 * 60 * 1000  # 24 hours in milliseconds
