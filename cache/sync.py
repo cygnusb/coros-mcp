@@ -3,6 +3,8 @@
 Each fetch_*_cached() function:
   1. Checks what's already in the local SQLite cache.
   2. Only hits the Coros API for dates not yet cached (the "tail").
+     Data within the last STABLE_AFTER_DAYS days is always re-fetched
+     to pick up same-day activities and delayed watch→phone syncs.
   3. Writes new records back to the cache before returning.
 
 sync_all() does a full historical backfill in 12-week chunks.
@@ -42,13 +44,26 @@ def _today() -> str:
     return datetime.now().strftime("%Y%m%d")
 
 
+# Data older than this many days is considered stable (immutable).
+# Recent data is always re-fetched to capture same-day activities and
+# delayed watch→phone syncs (HRV, sleep scores can arrive hours later).
+STABLE_AFTER_DAYS = 2
+
+
 def _fetch_start(max_cached: Optional[str], requested_start: str) -> str:
-    """First date we need to fetch from the API."""
+    """First date we need to fetch from the API.
+
+    For historical data (older than STABLE_AFTER_DAYS), only fetch the
+    uncached tail. For recent data, always re-fetch from the stable
+    cutoff so that delayed syncs and same-day additions are picked up.
+    """
     if max_cached is None:
         return requested_start
-    day_after = _date_add(max_cached, 1)
-    # Never go earlier than what was requested (cache may already cover that)
-    return max(day_after, requested_start)
+    cutoff = _date_add(_today(), -STABLE_AFTER_DAYS)
+    # If max_cached is within the unstable window, re-fetch from cutoff.
+    # Otherwise only fetch the uncached tail.
+    stable_start = _date_add(max_cached, 1) if max_cached < cutoff else cutoff
+    return max(stable_start, requested_start)
 
 
 # ---------------------------------------------------------------------------
@@ -61,8 +76,9 @@ async def fetch_daily_records_cached(
     """Return daily metrics for [start_day, end_day], fetching only the uncached tail."""
     init_db()
     max_cached = get_max_daily_date()
+    cutoff = _date_add(_today(), -STABLE_AFTER_DAYS)
 
-    if max_cached is None or max_cached < end_day:
+    if max_cached is None or max_cached < end_day or end_day >= cutoff:
         fetch_from = _fetch_start(max_cached, start_day)
         new = await coros_api.fetch_daily_records(auth, fetch_from, end_day)
         if new:
@@ -77,8 +93,9 @@ async def fetch_sleep_cached(
     """Return sleep records for [start_day, end_day], fetching only the uncached tail."""
     init_db()
     max_cached = get_max_sleep_date()
+    cutoff = _date_add(_today(), -STABLE_AFTER_DAYS)
 
-    if max_cached is None or max_cached < end_day:
+    if max_cached is None or max_cached < end_day or end_day >= cutoff:
         fetch_from = _fetch_start(max_cached, start_day)
         new = await coros_api.fetch_sleep(auth, fetch_from, end_day)
         if new:
@@ -97,8 +114,9 @@ async def fetch_activities_cached(
     """Return activities for [start_day, end_day], fetching only the uncached tail."""
     init_db()
     max_cached = get_max_activity_date()
+    cutoff = _date_add(_today(), -STABLE_AFTER_DAYS)
 
-    if max_cached is None or max_cached < end_day:
+    if max_cached is None or max_cached < end_day or end_day >= cutoff:
         fetch_from = _fetch_start(max_cached, start_day)
         await _fetch_all_activity_pages(auth, fetch_from, end_day)
 
