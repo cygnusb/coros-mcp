@@ -11,6 +11,7 @@ sync_all() does a full historical backfill in 12-week chunks.
 """
 
 import asyncio
+import os
 from datetime import datetime, timedelta
 from typing import Callable, Coroutine, Optional
 
@@ -50,7 +51,9 @@ def _today() -> str:
 # Data older than this many days is considered stable (immutable).
 # Recent data is always re-fetched to capture same-day activities and
 # delayed watch→phone syncs (HRV, sleep scores can arrive hours later).
-STABLE_AFTER_DAYS = 2
+# Override with COROS_STABLE_DAYS env var (e.g. set to 0 to disable re-fetch,
+# or higher if your watch takes longer to sync to the phone).
+STABLE_AFTER_DAYS = int(os.getenv("COROS_STABLE_DAYS", "2"))
 
 
 def _fetch_start(max_cached: Optional[str], requested_start: str) -> str:
