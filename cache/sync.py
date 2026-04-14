@@ -22,6 +22,9 @@ from cache.store import (
     get_max_activity_date,
     get_max_daily_date,
     get_max_sleep_date,
+    get_min_activity_date,
+    get_min_daily_date,
+    get_min_sleep_date,
     get_sleep_records,
     init_db,
     upsert_activities,
@@ -70,37 +73,82 @@ def _fetch_start(max_cached: Optional[str], requested_start: str) -> str:
 # Cached fetch wrappers
 # ---------------------------------------------------------------------------
 
+def _resolve_fetch_range(
+    min_cached: Optional[str],
+    max_cached: Optional[str],
+    start_day: str,
+    end_day: str,
+    cutoff: str,
+) -> Optional[tuple[str, str]]:
+    """Determine the (fetch_from, fetch_to) range needed to satisfy [start_day, end_day].
+
+    Returns None when the cache fully covers the requested range and no API
+    call is needed.  Otherwise returns the tightest range that both satisfies
+    the request and keeps the cache contiguous:
+
+    - Empty cache            → fetch the entire requested range.
+    - Historical gap         → start_day precedes min_cached; bridge rightward
+                               to min_cached-1 so the new data joins the existing
+                               cache without leaving a gap in the middle.
+    - Tail gap / recent data → end_day exceeds max_cached, or falls within the
+                               unstable window; fetch only the uncached tail.
+    - Both gaps              → start_day < min_cached AND end_day > max_cached;
+                               fetch the whole requested range.
+    - Fully covered          → [min_cached, max_cached] contains [start_day,
+                               end_day] and end_day is outside the unstable
+                               window; no fetch required.
+    """
+    if max_cached is None:
+        return (start_day, end_day)
+
+    historical_gap = min_cached is not None and start_day < min_cached
+    tail_gap = max_cached < end_day or end_day >= cutoff
+
+    if historical_gap and tail_gap:
+        return (start_day, end_day)
+
+    if historical_gap:
+        # Fetch from start_day and bridge up to the existing cache boundary so
+        # the cache stays contiguous.  If end_day already reaches or overlaps
+        # min_cached, no bridging needed beyond end_day.
+        bridge_end = max(end_day, _date_add(min_cached, -1))
+        return (start_day, bridge_end)
+
+    if tail_gap:
+        return (_fetch_start(max_cached, start_day), end_day)
+
+    return None  # fully covered
+
+
 async def fetch_daily_records_cached(
     auth: StoredAuth, start_day: str, end_day: str
 ) -> list[DailyRecord]:
-    """Return daily metrics for [start_day, end_day], fetching only the uncached tail."""
+    """Return daily metrics for [start_day, end_day], fetching only what is not yet cached."""
     init_db()
-    max_cached = get_max_daily_date()
     cutoff = _date_add(_today(), -STABLE_AFTER_DAYS)
-
-    if max_cached is None or max_cached < end_day or end_day >= cutoff:
-        fetch_from = _fetch_start(max_cached, start_day)
-        new = await coros_api.fetch_daily_records(auth, fetch_from, end_day)
+    fetch_range = _resolve_fetch_range(
+        get_min_daily_date(), get_max_daily_date(), start_day, end_day, cutoff
+    )
+    if fetch_range:
+        new = await coros_api.fetch_daily_records(auth, *fetch_range)
         if new:
             upsert_daily_records(new)
-
     return get_daily_records(start_day, end_day)
 
 
 async def fetch_sleep_cached(
     auth: StoredAuth, start_day: str, end_day: str
 ) -> list[SleepRecord]:
-    """Return sleep records for [start_day, end_day], fetching only the uncached tail."""
+    """Return sleep records for [start_day, end_day], fetching only what is not yet cached."""
     init_db()
-    max_cached = get_max_sleep_date()
     cutoff = _date_add(_today(), -STABLE_AFTER_DAYS)
-
-    if max_cached is None or max_cached < end_day or end_day >= cutoff:
-        fetch_from = _fetch_start(max_cached, start_day)
-        new = await coros_api.fetch_sleep(auth, fetch_from, end_day)
+    fetch_range = _resolve_fetch_range(
+        get_min_sleep_date(), get_max_sleep_date(), start_day, end_day, cutoff
+    )
+    if fetch_range:
+        new = await coros_api.fetch_sleep(auth, *fetch_range)
         if new:
             upsert_sleep_records(new)
-
     return get_sleep_records(start_day, end_day)
 
 
@@ -111,15 +159,14 @@ async def fetch_activities_cached(
     page: int = 1,
     size: int = 30,
 ) -> tuple[list[ActivitySummary], int]:
-    """Return activities for [start_day, end_day], fetching only the uncached tail."""
+    """Return activities for [start_day, end_day], fetching only what is not yet cached."""
     init_db()
-    max_cached = get_max_activity_date()
     cutoff = _date_add(_today(), -STABLE_AFTER_DAYS)
-
-    if max_cached is None or max_cached < end_day or end_day >= cutoff:
-        fetch_from = _fetch_start(max_cached, start_day)
-        await _fetch_all_activity_pages(auth, fetch_from, end_day)
-
+    fetch_range = _resolve_fetch_range(
+        get_min_activity_date(), get_max_activity_date(), start_day, end_day, cutoff
+    )
+    if fetch_range:
+        await _fetch_all_activity_pages(auth, *fetch_range)
     cached = get_activities(start_day, end_day)
     start_idx = (page - 1) * size
     return cached[start_idx: start_idx + size], len(cached)
@@ -172,6 +219,20 @@ async def sync_all(
     chunk_days = 12 * 7  # 12 weeks — within the API's 24-week dayDetail limit
 
     stop = end_day if end_day else today
+
+    # Enforce cache continuity: if an explicit end_day falls before the current
+    # cache frontier, extend stop to cover the gap, preventing a mid-range hole
+    # between the newly synced range and the existing cached data.
+    existing_max = max(
+        (d for d in [
+            get_max_daily_date(),
+            get_max_sleep_date(),
+            get_max_activity_date(),
+        ] if d is not None),
+        default=None,
+    )
+    if existing_max and existing_max > stop:
+        stop = existing_max
     stats: dict = {"daily": 0, "sleep": 0, "activities": 0, "errors": []}
 
     async def _progress(msg: str) -> None:

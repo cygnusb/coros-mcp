@@ -137,7 +137,6 @@ def cmd_auth_clear() -> int:
 
 def cmd_sync() -> int:
     """Full historical sync: pull all data from Coros and store locally."""
-    import asyncio
     from cache.sync import sync_all
     from cache.store import cache_status
 
