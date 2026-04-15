@@ -478,14 +478,14 @@ def _parse_activity(item: dict) -> ActivitySummary:
         start_time=str(item["startTime"]) if item.get("startTime") else None,
         end_time=str(item["endTime"]) if item.get("endTime") else None,
         duration_seconds=item.get("totalTime"),
-        distance_meters=item.get("totalDistance"),
+        distance_meters=item.get("distance") or item.get("totalDistance"),
         avg_hr=item.get("avgHr"),
         max_hr=item.get("maxHr"),
-        calories=item.get("calorie") or item.get("totalCalorie"),
+        calories=round((item.get("calorie") or item.get("totalCalorie") or 0) / 1000) or None,
         training_load=item.get("trainingLoad"),
         avg_power=item.get("avgPower"),
         normalized_power=item.get("np"),
-        elevation_gain=item.get("totalAscent") or item.get("elevationGain"),
+        elevation_gain=item.get("ascent") or item.get("totalAscent") or item.get("elevationGain"),
     )
 
 
