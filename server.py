@@ -26,7 +26,7 @@ from fastmcp import FastMCP
 
 import coros_api
 from coros_api import TOKEN_TTL_MS
-from cache.store import cache_status, init_db
+from cache.store import cache_status, fmt_local_time, init_db
 from cache.sync import (
     fetch_activities_cached,
     fetch_daily_records_cached,
@@ -229,7 +229,7 @@ async def get_daily_metrics(weeks: int = 4) -> dict:
     -------
     dict with keys: records (list of daily records), count, date_range
     Each record contains:
-      - date: YYYYMMDD
+      - date: YYYYMMDD local date (per COROS_TIMEZONE, defaults to system timezone)
       - avg_sleep_hrv: average nightly RMSSD in ms
       - baseline: rolling baseline RMSSD
       - rhr: resting heart rate (bpm)
@@ -292,7 +292,8 @@ async def get_sleep_data(weeks: int = 4) -> dict:
     -------
     dict with keys: records (list of nightly records), count, date_range
     Each record contains:
-      - date: YYYYMMDD (the morning date — sleep started the night before)
+      - date: YYYYMMDD local date (the morning date — sleep started the night before;
+              per COROS_TIMEZONE, defaults to system timezone)
       - total_duration_minutes: total sleep in minutes
       - phases.deep_minutes: deep sleep
       - phases.light_minutes: light sleep
@@ -342,9 +343,10 @@ async def list_activities(
     Parameters
     ----------
     start_day : str
-        Start date in YYYYMMDD format.
+        Start date in YYYYMMDD format — local calendar date (per COROS_TIMEZONE,
+        defaults to system timezone). Example: "20250316" for March 16 in your timezone.
     end_day : str
-        End date in YYYYMMDD format.
+        End date in YYYYMMDD format — local calendar date (same convention as start_day).
     page : int
         Page number (default 1).
     size : int
@@ -354,16 +356,23 @@ async def list_activities(
     -------
     dict with keys: activities (list), total_count, page
     Each activity contains: activity_id, name, sport_type, sport_name,
-    start_time, end_time, duration_seconds, distance_meters, avg_hr, max_hr,
-    calories, training_load, avg_power, normalized_power, elevation_gain
+    start_time (local datetime string "YYYY-MM-DD HH:MM:SS", per COROS_TIMEZONE),
+    end_time (same format), duration_seconds, distance_meters, avg_hr, max_hr,
+    calories, training_load, avg_power, normalized_power, elevation_gain.
     """
     auth = await _get_auth()
     if auth is None:
         return {"error": "Not authenticated. Set COROS_EMAIL and COROS_PASSWORD in .env or call authenticate_coros.", "activities": []}
     try:
         activities, total = await _run_with_auth(fetch_activities_cached, auth, start_day, end_day, page, size)
+        result = []
+        for a in activities:
+            d = a.model_dump()
+            d["start_time"] = fmt_local_time(a.start_time)
+            d["end_time"] = fmt_local_time(a.end_time)
+            result.append(d)
         return {
-            "activities": [a.model_dump() for a in activities],
+            "activities": result,
             "total_count": total,
             "page": page,
         }
@@ -738,11 +747,12 @@ async def sync_coros_data(start_day: str = "", end_day: str = "") -> dict:
     Parameters
     ----------
     start_day : str
-        Start of sync range in YYYYMMDD format.
+        Start of sync range in YYYYMMDD format — local calendar date
+        (per COROS_TIMEZONE, defaults to system timezone).
         Defaults to two years ago if omitted.
     end_day : str
-        End of sync range in YYYYMMDD format.
-        Defaults to today if omitted.
+        End of sync range in YYYYMMDD format — local calendar date
+        (same convention as start_day). Defaults to today if omitted.
 
     Returns
     -------

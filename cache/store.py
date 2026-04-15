@@ -5,12 +5,23 @@ Three data tables (daily_records, sleep_records, activities) plus a
 sync_meta table that tracks the latest synced date per data type.
 """
 
+import os
 import sqlite3
 import time
 from contextlib import contextmanager
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
+
+# Local timezone used to compute start_day (the calendar date visible to the user).
+# Set COROS_TIMEZONE to your UTC offset in hours (e.g. "8" for CST, "-5" for EST).
+# Defaults to the system local timezone when unset.
+# This only affects the start_day index column; start_time/end_time are always stored
+# as UTC Unix seconds (unchanged from the Coros API response).
+_tz_offset = os.getenv("COROS_TIMEZONE")
+_LOCAL_TZ: timezone | None = (
+    timezone(timedelta(hours=int(_tz_offset))) if _tz_offset is not None else None
+)
 
 from models import ActivitySummary, DailyRecord, SleepRecord
 
@@ -129,20 +140,50 @@ def get_min_sleep_date() -> Optional[str]:
 # ---------------------------------------------------------------------------
 
 def _activity_start_day(a: ActivitySummary) -> str:
-    """Extract YYYYMMDD from an activity's start_time string."""
+    """Return YYYYMMDD local date for DB indexing.
+
+    start_time is a UTC Unix seconds value (as returned by the Coros API).
+    The local date is computed using COROS_TIMEZONE (UTC offset in hours) when set,
+    otherwise falls back to the system local timezone via datetime.fromtimestamp().
+    This date is used only for range queries — it is the calendar date as seen
+    by the user, not the UTC date.
+    """
     if not a.start_time:
         return ""
     s = a.start_time
-    # Unix timestamp (10 digits = seconds, 13 digits = milliseconds)
+    # UTC Unix timestamp (10 digits = seconds, 13 digits = milliseconds)
     if s.isdigit():
         if len(s) == 13:  # milliseconds
-            return datetime.fromtimestamp(int(s) / 1000).strftime("%Y%m%d")
-        if len(s) == 10:  # seconds
-            return datetime.fromtimestamp(int(s)).strftime("%Y%m%d")
-    # YYYYMMDDHHMMSS or just YYYYMMDD
+            ts = int(s) / 1000
+        elif len(s) == 10:  # seconds
+            ts = int(s)
+        else:
+            ts = None
+        if ts is not None:
+            if _LOCAL_TZ is not None:
+                return datetime.fromtimestamp(ts, tz=_LOCAL_TZ).strftime("%Y%m%d")
+            else:
+                return datetime.fromtimestamp(ts).strftime("%Y%m%d")
+    # YYYYMMDDHHMMSS or YYYYMMDD already encoded as string
     if len(s) >= 8 and s[:8].isdigit():
         return s[:8]
     return ""
+
+
+def fmt_local_time(unix_secs: str | None) -> str | None:
+    """Convert a UTC Unix seconds string to a local datetime string for display.
+
+    Uses COROS_TIMEZONE (UTC offset in hours) when set, otherwise falls back
+    to the system local timezone.  Returns None for missing/non-numeric values.
+
+    Example: "1742079723" -> "2025-03-16 07:02:03" (on a UTC+8 system)
+    """
+    if not unix_secs or not str(unix_secs).isdigit():
+        return unix_secs
+    ts = int(unix_secs)
+    if _LOCAL_TZ is not None:
+        return datetime.fromtimestamp(ts, tz=_LOCAL_TZ).strftime("%Y-%m-%d %H:%M:%S")
+    return datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M:%S")
 
 
 def upsert_activities(activities: list[ActivitySummary]) -> None:

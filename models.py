@@ -54,8 +54,8 @@ class ActivitySummary(BaseModel):
     name: Optional[str] = None
     sport_type: Optional[int] = None
     sport_name: Optional[str] = None
-    start_time: Optional[str] = None
-    end_time: Optional[str] = None
+    start_time: Optional[str] = None  # UTC Unix seconds (seconds since epoch), as returned by Coros API
+    end_time: Optional[str] = None    # UTC Unix seconds (seconds since epoch), as returned by Coros API
     duration_seconds: Optional[int] = None
     distance_meters: Optional[float] = None
     avg_hr: Optional[int] = None
