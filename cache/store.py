@@ -134,7 +134,7 @@ def _activity_start_day(a: ActivitySummary) -> str:
     """Return YYYYMMDD local date for DB indexing.
 
     start_time is a UTC Unix seconds value (as returned by the Coros API).
-    The local date is computed using COROS_TIMEZONE (UTC offset in hours) when set,
+    The local date is computed using COROS_TIMEZONE (e.g. "8", "5.5", "+05:30") when set,
     otherwise falls back to the system local timezone via datetime.fromtimestamp().
     This date is used only for range queries — it is the calendar date as seen
     by the user, not the UTC date.

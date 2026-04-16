@@ -4,9 +4,6 @@ import getpass
 import sys
 import time
 
-from dotenv import load_dotenv
-load_dotenv()
-
 from auth.storage import clear_token, get_token, is_keyring_available
 from coros_api import TOKEN_TTL_MS, get_stored_auth, try_auto_login, login, login_mobile
 
@@ -137,8 +134,30 @@ def cmd_auth_clear() -> int:
 
 def cmd_sync() -> int:
     """Full historical sync: pull all data from Coros and store locally."""
+    import argparse
+    from datetime import datetime, timedelta
     from cache.sync import sync_all
     from cache.store import cache_status
+
+    parser = argparse.ArgumentParser(
+        prog="coros-mcp sync",
+        description="Sync Coros data to the local cache.",
+    )
+    parser.add_argument(
+        "--from",
+        dest="start_day",
+        metavar="YYYYMMDD",
+        help="First date to sync (default: 2 years ago)",
+    )
+    parser.add_argument(
+        "--to",
+        dest="end_day",
+        metavar="YYYYMMDD",
+        help="Last date to sync (default: today)",
+    )
+    parsed = parser.parse_args(sys.argv[2:])
+    start_day = parsed.start_day or (datetime.now() - timedelta(days=730)).strftime("%Y%m%d")
+    end_day = parsed.end_day
 
     auth = get_stored_auth()
     if auth is None:
@@ -146,27 +165,6 @@ def cmd_sync() -> int:
     if auth is None:
         print("✗ Not authenticated. Set COROS_EMAIL and COROS_PASSWORD in .env, or run 'coros-mcp auth'.")
         return 1
-
-    # Parse optional --from / --to flags
-    start_day = None
-    end_day = None
-    args = sys.argv[2:]
-    i = 0
-    while i < len(args):
-        if args[i] == "--from" and i + 1 < len(args):
-            start_day = args[i + 1]; i += 2
-        elif args[i].startswith("--from="):
-            start_day = args[i].split("=", 1)[1]; i += 1
-        elif args[i] == "--to" and i + 1 < len(args):
-            end_day = args[i + 1]; i += 2
-        elif args[i].startswith("--to="):
-            end_day = args[i].split("=", 1)[1]; i += 1
-        else:
-            i += 1
-
-    from datetime import datetime, timedelta
-    if not start_day:
-        start_day = (datetime.now() - timedelta(days=730)).strftime("%Y%m%d")
 
     range_str = f"{start_day} → {end_day}" if end_day else f"{start_day} → today"
     print(f"Coros MCP — Sync ({range_str})")
@@ -245,6 +243,9 @@ Usage:
 
 
 def main() -> None:
+    from dotenv import load_dotenv
+    load_dotenv()
+
     command = sys.argv[1] if len(sys.argv) > 1 else "help"
     commands = {
         "serve": cmd_serve,

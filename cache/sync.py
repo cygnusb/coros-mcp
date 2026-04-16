@@ -19,6 +19,7 @@ from typing import Callable, Coroutine, Optional
 logger = logging.getLogger(__name__)
 
 import coros_api
+from cache.utils import LOCAL_TZ
 from cache.store import (
     cache_status,
     get_activities,
@@ -48,6 +49,9 @@ def _date_add(day: str, days: int) -> str:
 
 
 def _today() -> str:
+    """Return today's date as YYYYMMDD in the configured local timezone."""
+    if LOCAL_TZ is not None:
+        return datetime.now(tz=LOCAL_TZ).strftime("%Y%m%d")
     return datetime.now().strftime("%Y%m%d")
 
 
