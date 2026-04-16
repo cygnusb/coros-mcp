@@ -11,9 +11,12 @@ sync_all() does a full historical backfill in 12-week chunks.
 """
 
 import asyncio
+import logging
 import os
 from datetime import datetime, timedelta
 from typing import Callable, Coroutine, Optional
+
+logger = logging.getLogger(__name__)
 
 import coros_api
 from cache.store import (
@@ -115,6 +118,13 @@ def _resolve_fetch_range(
         # the cache stays contiguous.  If end_day already reaches or overlaps
         # min_cached, no bridging needed beyond end_day.
         bridge_end = max(end_day, _date_add(min_cached, -1))
+        if bridge_end > end_day:
+            logger.warning(
+                "Cache contiguity bridge extended fetch range: requested %s→%s, "
+                "but fetching %s→%s to close gap to existing cache (min_cached=%s). "
+                "This may fetch significantly more data than requested.",
+                start_day, end_day, start_day, bridge_end, min_cached,
+            )
         return (start_day, bridge_end)
 
     if tail_gap:
