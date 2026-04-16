@@ -26,7 +26,8 @@ from fastmcp import FastMCP
 
 import coros_api
 from coros_api import TOKEN_TTL_MS
-from cache.store import cache_status, fmt_local_time, init_db
+from cache.store import cache_status, init_db
+from cache.utils import fmt_local_time
 from cache.sync import (
     fetch_activities_cached,
     fetch_daily_records_cached,

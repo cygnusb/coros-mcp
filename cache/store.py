@@ -9,20 +9,11 @@ import os
 import sqlite3
 import time
 from contextlib import contextmanager
-from datetime import datetime, timedelta, timezone
+from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
-# Local timezone used to compute start_day (the calendar date visible to the user).
-# Set COROS_TIMEZONE to your UTC offset in hours (e.g. "8" for CST, "-5" for EST).
-# Defaults to the system local timezone when unset.
-# This only affects the start_day index column; start_time/end_time are always stored
-# as UTC Unix seconds (unchanged from the Coros API response).
-_tz_offset = os.getenv("COROS_TIMEZONE")
-_LOCAL_TZ: timezone | None = (
-    timezone(timedelta(hours=int(_tz_offset))) if _tz_offset is not None else None
-)
-
+from cache.utils import LOCAL_TZ as _LOCAL_TZ
 from models import ActivitySummary, DailyRecord, SleepRecord
 
 CACHE_DB = Path.home() / ".config" / "coros-mcp" / "cache.db"
@@ -168,22 +159,6 @@ def _activity_start_day(a: ActivitySummary) -> str:
     if len(s) >= 8 and s[:8].isdigit():
         return s[:8]
     return ""
-
-
-def fmt_local_time(unix_secs: str | None) -> str | None:
-    """Convert a UTC Unix seconds string to a local datetime string for display.
-
-    Uses COROS_TIMEZONE (UTC offset in hours) when set, otherwise falls back
-    to the system local timezone.  Returns None for missing/non-numeric values.
-
-    Example: "1742079723" -> "2025-03-16 07:02:03" (on a UTC+8 system)
-    """
-    if not unix_secs or not str(unix_secs).isdigit():
-        return unix_secs
-    ts = int(unix_secs)
-    if _LOCAL_TZ is not None:
-        return datetime.fromtimestamp(ts, tz=_LOCAL_TZ).strftime("%Y-%m-%d %H:%M:%S")
-    return datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M:%S")
 
 
 def upsert_activities(activities: list[ActivitySummary]) -> None:
