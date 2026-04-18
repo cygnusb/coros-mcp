@@ -61,7 +61,7 @@ BASE_URLS = {
 # Mobile app API — used for sleep data (different host from Training Hub web API)
 MOBILE_BASE_URLS = {
     "eu": "https://apieu.coros.com",
-    "us": "https://apius.coros.com",
+    "us": "https://api.coros.com",
     "asia": "https://apicn.coros.com",
     "cn": "https://apicn.coros.com",
 }
