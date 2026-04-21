@@ -26,8 +26,17 @@ from fastmcp import FastMCP
 
 import coros_api
 from coros_api import TOKEN_TTL_MS
+from cache.store import cache_status, init_db
+from cache.utils import fmt_local_time
+from cache.sync import (
+    fetch_activities_cached,
+    fetch_daily_records_cached,
+    fetch_sleep_cached,
+    sync_all as _sync_all,
+)
 
 load_dotenv()
+init_db()
 
 mcp = FastMCP("coros-mcp")
 
@@ -205,21 +214,23 @@ async def check_coros_auth() -> dict:
 async def get_daily_metrics(weeks: int = 4) -> dict:
     """
     Retrieve nightly HRV and daily metrics from Coros for a configurable
-    time range (up to 24 weeks).
+    time range (up to 52 weeks).
 
-    Uses the /analyse/dayDetail/query endpoint which returns daily records
-    including HRV, resting heart rate, training load, and fatigue rate.
+    Historical data is served from the local SQLite cache (fast); only the
+    uncached tail is fetched from the Coros API. The underlying API endpoint
+    supports up to 24 weeks per call, but the cache layer handles longer
+    ranges transparently by reading stored records directly.
 
     Parameters
     ----------
     weeks : int
-        Number of weeks to fetch (1–24). Default: 4.
+        Number of weeks to fetch (1–52). Default: 4.
 
     Returns
     -------
     dict with keys: records (list of daily records), count, date_range
     Each record contains:
-      - date: YYYYMMDD
+      - date: YYYYMMDD local date (per COROS_TIMEZONE, defaults to system timezone)
       - avg_sleep_hrv: average nightly RMSSD in ms
       - baseline: rolling baseline RMSSD
       - rhr: resting heart rate (bpm)
@@ -243,14 +254,14 @@ async def get_daily_metrics(weeks: int = 4) -> dict:
             "records": [],
         }
 
-    weeks = max(1, min(weeks, 24))
+    weeks = max(1, min(weeks, 52))
     end_dt = datetime.now()
     start_dt = end_dt - timedelta(weeks=weeks)
     start_day = start_dt.strftime("%Y%m%d")
     end_day = end_dt.strftime("%Y%m%d")
 
     try:
-        records = await _run_with_auth(coros_api.fetch_daily_records, auth, start_day, end_day)
+        records = await _run_with_auth(fetch_daily_records_cached, auth, start_day, end_day)
         return {
             "records": [r.model_dump() for r in records],
             "count": len(records),
@@ -282,7 +293,8 @@ async def get_sleep_data(weeks: int = 4) -> dict:
     -------
     dict with keys: records (list of nightly records), count, date_range
     Each record contains:
-      - date: YYYYMMDD (the morning date — sleep started the night before)
+      - date: YYYYMMDD local date (the morning date — sleep started the night before;
+              per COROS_TIMEZONE, defaults to system timezone)
       - total_duration_minutes: total sleep in minutes
       - phases.deep_minutes: deep sleep
       - phases.light_minutes: light sleep
@@ -305,7 +317,7 @@ async def get_sleep_data(weeks: int = 4) -> dict:
     end_day = end_dt.strftime("%Y%m%d")
 
     try:
-        records = await _run_with_auth(coros_api.fetch_sleep, auth, start_day, end_day)
+        records = await _run_with_auth(fetch_sleep_cached, auth, start_day, end_day)
         return {
             "records": [r.model_dump() for r in records],
             "count": len(records),
@@ -332,9 +344,10 @@ async def list_activities(
     Parameters
     ----------
     start_day : str
-        Start date in YYYYMMDD format.
+        Start date in YYYYMMDD format — local calendar date (per COROS_TIMEZONE,
+        defaults to system timezone). Example: "20250316" for March 16 in your timezone.
     end_day : str
-        End date in YYYYMMDD format.
+        End date in YYYYMMDD format — local calendar date (same convention as start_day).
     page : int
         Page number (default 1).
     size : int
@@ -344,16 +357,23 @@ async def list_activities(
     -------
     dict with keys: activities (list), total_count, page
     Each activity contains: activity_id, name, sport_type, sport_name,
-    start_time, end_time, duration_seconds, distance_meters, avg_hr, max_hr,
-    calories, training_load, avg_power, normalized_power, elevation_gain
+    start_time (local datetime string "YYYY-MM-DD HH:MM:SS", per COROS_TIMEZONE),
+    end_time (same format), duration_seconds, distance_meters, avg_hr, max_hr,
+    calories, training_load, avg_power, normalized_power, elevation_gain.
     """
     auth = await _get_auth()
     if auth is None:
         return {"error": "Not authenticated. Set COROS_EMAIL and COROS_PASSWORD in .env or call authenticate_coros.", "activities": []}
     try:
-        activities, total = await _run_with_auth(coros_api.fetch_activities, auth, start_day, end_day, page, size)
+        activities, total = await _run_with_auth(fetch_activities_cached, auth, start_day, end_day, page, size)
+        result = []
+        for a in activities:
+            d = a.model_dump()
+            d["start_time"] = fmt_local_time(a.start_time)
+            d["end_time"] = fmt_local_time(a.end_time)
+            result.append(d)
         return {
-            "activities": [a.model_dump() for a in activities],
+            "activities": result,
             "total_count": total,
             "page": page,
         }
@@ -705,6 +725,75 @@ async def list_exercises(sport_type: int = 4) -> dict:
         return {"exercises": items, "count": len(items), "sport_type": sport_type}
     except Exception as exc:
         return {"error": str(exc), "exercises": []}
+
+
+# ---------------------------------------------------------------------------
+# Tool: sync_coros_data
+# ---------------------------------------------------------------------------
+
+@mcp.tool()
+async def sync_coros_data(start_day: str = "", end_day: str = "") -> dict:
+    """
+    Sync Coros data for a date range into the local SQLite cache.
+
+    After the first full sync, subsequent calls to get_daily_metrics,
+    get_sleep_data, and list_activities will serve historical data from
+    cache and only fetch the incremental tail from the API.
+
+    For large date ranges (> 6 months), call this tool in segments to
+    avoid timeout (e.g. one segment per year). For the initial full
+    historical backfill, use the CLI instead:
+        coros-mcp sync --from 20230101
+
+    Parameters
+    ----------
+    start_day : str
+        Start of sync range in YYYYMMDD format — local calendar date
+        (per COROS_TIMEZONE, defaults to system timezone).
+        Defaults to two years ago if omitted.
+    end_day : str
+        End of sync range in YYYYMMDD format — local calendar date
+        (same convention as start_day). Defaults to today if omitted.
+
+    Returns
+    -------
+    dict with keys: daily (records synced), sleep (records synced),
+    activities (records synced), errors (list), cache (coverage summary)
+    """
+    auth = await _get_auth()
+    if auth is None:
+        return {"error": "Not authenticated. Set COROS_EMAIL and COROS_PASSWORD or call authenticate_coros."}
+
+    from datetime import datetime, timedelta
+    if not start_day:
+        start_day = (datetime.now() - timedelta(days=730)).strftime("%Y%m%d")
+    if not end_day:
+        end_day = datetime.now().strftime("%Y%m%d")
+
+    try:
+        return await _sync_all(auth, start_day, end_day=end_day)
+    except Exception as exc:
+        return {"error": str(exc)}
+
+
+# ---------------------------------------------------------------------------
+# Tool: get_cache_status
+# ---------------------------------------------------------------------------
+
+@mcp.tool()
+async def get_cache_status() -> dict:
+    """
+    Show what data is currently stored in the local cache.
+
+    Returns
+    -------
+    dict with keys: daily_records, sleep_records, activities — each with:
+      - count: number of cached records
+      - from: earliest cached date (YYYYMMDD)
+      - to: latest cached date (YYYYMMDD)
+    Also includes db_path: absolute path to the SQLite file.
+    """
+    return cache_status()
 
 
 # ---------------------------------------------------------------------------

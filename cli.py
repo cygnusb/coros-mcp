@@ -5,7 +5,7 @@ import sys
 import time
 
 from auth.storage import clear_token, get_token, is_keyring_available
-from coros_api import TOKEN_TTL_MS, get_stored_auth, login, login_mobile
+from coros_api import TOKEN_TTL_MS, get_stored_auth, try_auto_login, login, login_mobile
 
 
 def _prompt_credentials() -> tuple[str, str, str]:
@@ -91,6 +91,8 @@ def cmd_auth_mobile() -> int:
 def cmd_auth_status() -> int:
     """Check whether valid tokens are stored."""
     auth = get_stored_auth()
+    if auth is None:
+        auth = asyncio.run(try_auto_login())
     if auth:
         age_ms = int(time.time() * 1000) - auth.timestamp
         remaining_hours = round((TOKEN_TTL_MS - age_ms) / 3_600_000, 1)
@@ -130,6 +132,90 @@ def cmd_auth_clear() -> int:
         return 1
 
 
+def cmd_sync() -> int:
+    """Full historical sync: pull all data from Coros and store locally."""
+    import argparse
+    from datetime import datetime, timedelta
+    from cache.sync import sync_all
+    from cache.store import cache_status
+
+    parser = argparse.ArgumentParser(
+        prog="coros-mcp sync",
+        description="Sync Coros data to the local cache.",
+    )
+    parser.add_argument(
+        "--from",
+        dest="start_day",
+        metavar="YYYYMMDD",
+        help="First date to sync (default: 2 years ago)",
+    )
+    parser.add_argument(
+        "--to",
+        dest="end_day",
+        metavar="YYYYMMDD",
+        help="Last date to sync (default: today)",
+    )
+    parsed = parser.parse_args(sys.argv[2:])
+    start_day = parsed.start_day or (datetime.now() - timedelta(days=730)).strftime("%Y%m%d")
+    end_day = parsed.end_day
+
+    auth = get_stored_auth()
+    if auth is None:
+        auth = asyncio.run(try_auto_login())
+    if auth is None:
+        print("✗ Not authenticated. Set COROS_EMAIL and COROS_PASSWORD in .env, or run 'coros-mcp auth'.")
+        return 1
+
+    range_str = f"{start_day} → {end_day}" if end_day else f"{start_day} → today"
+    print(f"Coros MCP — Sync ({range_str})")
+    print("This may take a few minutes for a large date range.")
+    print()
+
+    async def _run():
+        async def on_progress(msg: str):
+            print(f"  {msg}")
+
+        return await sync_all(auth, start_day, end_day=end_day, on_progress=on_progress)
+
+    try:
+        stats = asyncio.run(_run())
+        print()
+        print(f"✓ Sync complete")
+        print(f"  Daily records : {stats['daily']}")
+        print(f"  Sleep records : {stats['sleep']}")
+        print(f"  Activities    : {stats['activities']}")
+        if stats["errors"]:
+            print(f"  Errors        : {len(stats['errors'])}")
+            for e in stats["errors"]:
+                print(f"    - {e}")
+        c = stats.get("cache", {})
+        print()
+        print("Cache coverage:")
+        for key in ("daily_records", "sleep_records", "activities"):
+            s = c.get(key, {})
+            print(f"  {key:16s}: {s.get('count', 0)} records  [{s.get('from', '—')} → {s.get('to', '—')}]")
+        return 0
+    except Exception as e:
+        print(f"✗ Sync failed: {e}")
+        return 1
+
+
+def cmd_cache_status() -> int:
+    """Show local cache coverage."""
+    from cache.store import cache_status, init_db
+    init_db()
+    c = cache_status()
+    print(f"Cache: {c['db_path']}")
+    print()
+    for key in ("daily_records", "sleep_records", "activities"):
+        s = c[key]
+        if s["count"]:
+            print(f"  {key:16s}: {s['count']:5d} records  [{s['from']} → {s['to']}]")
+        else:
+            print(f"  {key:16s}:     0 records  (empty — run 'coros-mcp sync')")
+    return 0
+
+
 def cmd_serve() -> int:
     """Start the MCP server (stdio mode)."""
     import server
@@ -142,19 +228,24 @@ def cmd_help() -> int:
         """Coros MCP Server — CLI
 
 Usage:
-  coros-mcp serve         Start the MCP server (used by Claude Code)
-  coros-mcp auth          Authenticate with your Coros account (web + mobile)
-  coros-mcp auth-web      Authenticate web API only (no sleep data)
-  coros-mcp auth-mobile   Authenticate mobile API only (sleep data)
-  coros-mcp auth-status   Check status of both tokens
-  coros-mcp auth-clear    Remove stored token
-  coros-mcp help          Show this help message
+  coros-mcp serve                   Start the MCP server (used by Claude Code / OpenClaw)
+  coros-mcp auth                    Authenticate with your Coros account (web + mobile)
+  coros-mcp auth-web                Authenticate web API only (no sleep data)
+  coros-mcp auth-mobile             Authenticate mobile API only (sleep data)
+  coros-mcp auth-status             Check status of both tokens
+  coros-mcp auth-clear              Remove stored token
+  coros-mcp sync [--from YYYYMMDD] [--to YYYYMMDD]  Sync to local cache (default: 2 years → today)
+  coros-mcp cache-status            Show local cache coverage
+  coros-mcp help                    Show this help message
 """
     )
     return 0
 
 
 def main() -> None:
+    from dotenv import load_dotenv
+    load_dotenv()
+
     command = sys.argv[1] if len(sys.argv) > 1 else "help"
     commands = {
         "serve": cmd_serve,
@@ -163,6 +254,8 @@ def main() -> None:
         "auth-mobile": cmd_auth_mobile,
         "auth-status": cmd_auth_status,
         "auth-clear": cmd_auth_clear,
+        "sync": cmd_sync,
+        "cache-status": cmd_cache_status,
         "help": cmd_help,
         "--help": cmd_help,
         "-h": cmd_help,

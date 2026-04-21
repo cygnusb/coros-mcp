@@ -470,6 +470,7 @@ SPORT_NAMES: dict[int, str] = {
 
 def _parse_activity(item: dict) -> ActivitySummary:
     sport_type = item.get("sportType")
+    cal_raw = item.get("calorie") if item.get("calorie") is not None else item.get("totalCalorie")
     return ActivitySummary(
         activity_id=str(item.get("labelId", "")),
         name=item.get("name") or item.get("remark"),
@@ -478,14 +479,14 @@ def _parse_activity(item: dict) -> ActivitySummary:
         start_time=str(item["startTime"]) if item.get("startTime") else None,
         end_time=str(item["endTime"]) if item.get("endTime") else None,
         duration_seconds=item.get("totalTime"),
-        distance_meters=item.get("distance") or item.get("totalDistance"),
+        distance_meters=item.get("distance") if item.get("distance") is not None else item.get("totalDistance"),
         avg_hr=item.get("avgHr"),
         max_hr=item.get("maxHr"),
-        calories=round((item.get("calorie") or item.get("totalCalorie") or 0) / 1000) or None,
+        calories=round(cal_raw / 1000) if cal_raw is not None else None,
         training_load=item.get("trainingLoad"),
         avg_power=item.get("avgPower"),
         normalized_power=item.get("np"),
-        elevation_gain=item.get("ascent") or item.get("totalAscent") or item.get("elevationGain"),
+        elevation_gain=item.get("ascent") if item.get("ascent") is not None else (item.get("totalAscent") if item.get("totalAscent") is not None else item.get("elevationGain")),
     )
 
 
