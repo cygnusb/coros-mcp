@@ -17,7 +17,6 @@ server authenticates automatically on the first request and re-authenticates
 transparently whenever the stored token is expired or rejected.
 """
 
-import os
 import time
 from datetime import datetime, timedelta
 

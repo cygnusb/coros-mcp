@@ -12,7 +12,6 @@ import json
 import os
 import random
 import time
-from pathlib import Path
 from typing import Optional
 
 import httpx
