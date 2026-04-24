@@ -487,6 +487,7 @@ def _parse_activity(item: dict) -> ActivitySummary:
         avg_power=item.get("avgPower"),
         normalized_power=item.get("np"),
         elevation_gain=item.get("ascent") if item.get("ascent") is not None else (item.get("totalAscent") if item.get("totalAscent") is not None else item.get("elevationGain")),
+        elevation_loss=item.get("descent") if item.get("descent") is not None else item.get("totalDescent"),
     )
 
 

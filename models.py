@@ -65,6 +65,7 @@ class ActivitySummary(BaseModel):
     avg_power: Optional[int] = None
     normalized_power: Optional[int] = None
     elevation_gain: Optional[int] = None
+    elevation_loss: Optional[int] = None
 
 
 class StoredAuth(BaseModel):
