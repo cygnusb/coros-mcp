@@ -51,18 +51,14 @@ class TestParseActivityZeroValues:
 
     # calories
 
-    def test_calories_zero_uses_primary_field(self):
-        """calorie=0 must not fall through to totalCalorie."""
-        a = self._parse(self._make_item(calorie=0, totalCalorie=300))
-        assert a.calories == 0
+    def test_calories_passed_through_as_cal(self):
+        """API field 'calorie' is in cal and stored as-is."""
+        a = self._parse(self._make_item(calorie=932148))
+        assert a.calories == 932148
 
-    @pytest.mark.xfail(
-        reason="totalCalorie /1000 conversion bug - API returns different units",
-        strict=True,
-    )
-    def test_calories_none_falls_back_to_totalCalorie(self):
-        a = self._parse(self._make_item(totalCalorie=300))
-        assert a.calories == 300
+    def test_calories_absent_is_none(self):
+        a = self._parse(self._make_item())
+        assert a.calories is None
 
     # elevation
 

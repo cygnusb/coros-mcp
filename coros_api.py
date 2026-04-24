@@ -469,7 +469,7 @@ SPORT_NAMES: dict[int, str] = {
 
 def _parse_activity(item: dict) -> ActivitySummary:
     sport_type = item.get("sportType")
-    cal_raw = item.get("calorie") if item.get("calorie") is not None else item.get("totalCalorie")
+    cal_raw = item.get("calorie")  # API field "calorie" is in cal (calories)
     return ActivitySummary(
         activity_id=str(item.get("labelId", "")),
         name=item.get("name") or item.get("remark"),
@@ -481,7 +481,7 @@ def _parse_activity(item: dict) -> ActivitySummary:
         distance_meters=item.get("distance") if item.get("distance") is not None else item.get("totalDistance"),
         avg_hr=item.get("avgHr"),
         max_hr=item.get("maxHr"),
-        calories=round(cal_raw / 1000) if cal_raw is not None else None,
+        calories=cal_raw,
         training_load=item.get("trainingLoad"),
         avg_power=item.get("avgPower"),
         normalized_power=item.get("np"),
