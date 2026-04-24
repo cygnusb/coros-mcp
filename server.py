@@ -427,6 +427,7 @@ async def create_workout(
     name: str,
     steps: list[dict],
     sport_type: int = 2,
+    intensity_type: int = 6,
 ) -> dict:
     """
     Create a new structured workout in the Coros account.
@@ -463,7 +464,9 @@ async def create_workout(
     sport_type : int
         Sport type ID. Default 2 = Indoor Cycling (Rollen).
         Use 200 for Road Bike (outdoor), 201 for Indoor Cycling (alt).
-
+    intensity_type : int
+        Intensity type ID. Default 6 = power in watts.
+        Other IntensityType values: 1=weight, 2=HR, 3=pace, 4=speed, 5=none, 6=power, 7=cadence
     Returns
     -------
     dict with keys: workout_id, name, total_minutes, steps_count, message
@@ -472,7 +475,7 @@ async def create_workout(
     if auth is None:
         return {"error": "Not authenticated. Set COROS_EMAIL and COROS_PASSWORD in .env or call authenticate_coros."}
     try:
-        workout_id = await _run_with_auth(coros_api.create_workout, auth, name, steps, sport_type)
+        workout_id = await _run_with_auth(coros_api.create_workout, auth, name, steps, sport_type, intensity_type)
         total_minutes, steps_count = _summarize_steps(steps)
         return {
             "workout_id": workout_id,
