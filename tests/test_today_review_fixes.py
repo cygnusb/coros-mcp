@@ -154,7 +154,6 @@ class TestParseTzOffset:
         assert self._parse("5:30") == timezone(timedelta(hours=5, minutes=30))
 
     def test_invalid_raises(self):
-        import pytest
         with pytest.raises((ValueError, TypeError)):
             self._parse("not-a-tz")
 
@@ -222,7 +221,6 @@ class TestTodayHonoursCOROSTIMEZONE:
 class TestCmdSyncArgparse:
 
     def test_unknown_flag_raises_systemexit(self):
-        import pytest
         with patch.object(sys, "argv", ["coros-mcp", "sync", "--unknown-flag"]):
             with pytest.raises(SystemExit) as exc_info:
                 import cli
@@ -233,7 +231,6 @@ class TestCmdSyncArgparse:
         assert exc_info.value.code != 0
 
     def test_help_exits_zero(self):
-        import pytest
         with patch.object(sys, "argv", ["coros-mcp", "sync", "--help"]):
             with pytest.raises(SystemExit) as exc_info:
                 import cli
