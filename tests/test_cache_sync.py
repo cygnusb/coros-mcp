@@ -9,8 +9,7 @@ Covers:
 
 import importlib
 import os
-import sys
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -151,7 +150,7 @@ class TestSyncAllContinuity:
              patch("coros_api.fetch_activities", return_value=([], 0)):
 
             from cache.sync import sync_all
-            stats = await sync_all(
+            _ = await sync_all(
                 auth=MagicMock(),
                 start_day="20260301",
                 end_day=end_day,

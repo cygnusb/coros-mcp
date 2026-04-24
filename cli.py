@@ -137,7 +137,6 @@ def cmd_sync() -> int:
     import argparse
     from datetime import datetime, timedelta
     from cache.sync import sync_all
-    from cache.store import cache_status
 
     parser = argparse.ArgumentParser(
         prog="coros-mcp sync",
@@ -180,7 +179,7 @@ def cmd_sync() -> int:
     try:
         stats = asyncio.run(_run())
         print()
-        print(f"✓ Sync complete")
+        print("✓ Sync complete")
         print(f"  Daily records : {stats['daily']}")
         print(f"  Sleep records : {stats['sleep']}")
         print(f"  Activities    : {stats['activities']}")

@@ -5,7 +5,6 @@ Three data tables (daily_records, sleep_records, activities) plus a
 sync_meta table that tracks the latest synced date per data type.
 """
 
-import os
 import sqlite3
 import time
 from contextlib import contextmanager

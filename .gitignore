@@ -5,3 +5,17 @@
 __pycache__/
 har/
 .idea/
+
+# Build artifacts
+*.egg-info/
+dist/
+build/
+
+# Tool caches
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+
+# OS files
+.DS_Store
+Thumbs.db
