@@ -469,7 +469,12 @@ SPORT_NAMES: dict[int, str] = {
 
 def _parse_activity(item: dict) -> ActivitySummary:
     sport_type = item.get("sportType")
-    cal_raw = item.get("calorie")  # API field "calorie" is in cal (calories)
+    # The Coros API field "calorie" is in physical calories (cal), NOT kilocalories (kcal).
+    # A typical 60-minute run returns ~600 000 cal, which equals 600 kcal.
+    # This is counterintuitive because consumer fitness apps and nutrition labels
+    # always display energy in kcal (sometimes written as "Calories" with a capital C).
+    # We store the raw value as-is; callers must divide by 1000 to get kcal.
+    cal_raw = item.get("calorie")
     return ActivitySummary(
         activity_id=str(item.get("labelId", "")),
         name=item.get("name") or item.get("remark"),
