@@ -234,7 +234,7 @@ List activities for a date range.
 
 Returns: `activities` (list), `total_count`, `page`
 
-Each activity includes: `activity_id`, `name`, `sport_type`, `sport_name`, `start_time`, `end_time`, `duration_seconds`, `distance_meters`, `avg_hr`, `max_hr`, `calories`, `training_load`, `avg_power`, `normalized_power`, `elevation_gain`
+Each activity includes: `activity_id`, `name`, `sport_type`, `sport_name`, `start_time`, `end_time`, `duration_seconds`, `distance_meters`, `avg_hr`, `max_hr`, `calories` (in cal — divide by 1000 for kcal), `training_load`, `avg_power`, `normalized_power`, `elevation_gain`
 
 ### `get_activity_detail`
 

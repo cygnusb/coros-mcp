@@ -358,7 +358,8 @@ async def list_activities(
     Each activity contains: activity_id, name, sport_type, sport_name,
     start_time (local datetime string "YYYY-MM-DD HH:MM:SS", per COROS_TIMEZONE),
     end_time (same format), duration_seconds, distance_meters, avg_hr, max_hr,
-    calories, training_load, avg_power, normalized_power, elevation_gain.
+    calories (in cal — divide by 1000 to get kcal), training_load, avg_power,
+    normalized_power, elevation_gain.
     """
     auth = await _get_auth()
     if auth is None:
