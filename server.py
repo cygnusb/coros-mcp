@@ -443,24 +443,22 @@ async def create_workout(
         List of workout steps. Each step is either a plain step or a repeat group.
 
         Plain step:
-          - name (str): step label, e.g. "10:00 Einfahren"
-          - duration_minutes (float): step duration in minutes
-          - power_low_w (int): lower power target in watts
-          - power_high_w (int): upper power target in watts
-
-        Repeat group (for intervals):
-          - repeat (int): number of repetitions
-          - steps (list[dict]): sub-steps (same format as plain steps)
+        - name (str): step label, e.g. "10:00 Einfahren"
+        - duration_minutes (float): step duration in minutes
+        - intensity_low (int): lower intensity target (watts, BPM, etc. depending on intensity_type)
+        - intensity_high (int): upper intensity target (0 = open-ended)
+        Note: power_low_w / power_high_w are accepted as legacy aliases for intensity_low / intensity_high.
 
         Example:
-          [
-            {"name": "Warm-up", "duration_minutes": 10, "power_low_w": 148, "power_high_w": 192},
+        [
+            {"name": "Warm-up", "duration_minutes": 10, "intensity_low": 148, "intensity_high": 192},
             {"repeat": 3, "steps": [
-              {"name": "Sweetspot", "duration_minutes": 10, "power_low_w": 265, "power_high_w": 285},
-              {"name": "Recovery", "duration_minutes": 3, "power_low_w": 150, "power_high_w": 175},
+            {"name": "Sweetspot", "duration_minutes": 10, "intensity_low": 265, "intensity_high": 285},
+            {"name": "Recovery", "duration_minutes": 3, "intensity_low": 150, "intensity_high": 175},
             ]},
-            {"name": "Cool-down", "duration_minutes": 10, "power_low_w": 100, "power_high_w": 165},
-          ]
+            {"name": "Cool-down", "duration_minutes": 10, "intensity_low": 100, "intensity_high": 165},
+        ]
+        
     sport_type : int
         Sport type ID. Default 2 = Indoor Cycling (Rollen).
         Use 200 for Road Bike (outdoor), 201 for Indoor Cycling (alt).
