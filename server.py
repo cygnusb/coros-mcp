@@ -449,12 +449,16 @@ async def create_workout(
         - intensity_high (int): upper intensity target (0 = open-ended)
         Note: power_low_w / power_high_w are accepted as legacy aliases for intensity_low / intensity_high.
 
+        Repeat group (for intervals):
+        - repeat (int): number of repetitions
+        - steps (list[dict]): sub-steps (same format as plain steps)
+
         Example:
         [
             {"name": "Warm-up", "duration_minutes": 10, "intensity_low": 148, "intensity_high": 192},
             {"repeat": 3, "steps": [
-            {"name": "Sweetspot", "duration_minutes": 10, "intensity_low": 265, "intensity_high": 285},
-            {"name": "Recovery", "duration_minutes": 3, "intensity_low": 150, "intensity_high": 175},
+                {"name": "Sweetspot", "duration_minutes": 10, "intensity_low": 265, "intensity_high": 285},
+                {"name": "Recovery", "duration_minutes": 3, "intensity_low": 150, "intensity_high": 175},
             ]},
             {"name": "Cool-down", "duration_minutes": 10, "intensity_low": 100, "intensity_high": 165},
         ]
@@ -465,6 +469,7 @@ async def create_workout(
     intensity_type : int
         Intensity type ID. Default 6 = power in watts.
         Other IntensityType values: 1=weight, 2=HR, 3=pace, 4=speed, 5=none, 6=power, 7=cadence
+        
     Returns
     -------
     dict with keys: workout_id, name, total_minutes, steps_count, message
