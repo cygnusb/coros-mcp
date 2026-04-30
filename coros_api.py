@@ -563,6 +563,7 @@ async def fetch_activity_detail(auth: StoredAuth, activity_id: str, sport_type: 
 
 # sportType=2 = Indoor Cycling (Rollen); intensityType=6 = power in watts
 # targetType=2 = time-based (seconds); exerciseType=2 = cycling block
+# IntensityType values: 1=weight, 2=HR, 3=pace, 4=speed, 5=none, 6=power, 7=cadence
 
 WORKOUT_SPORT_NAMES: dict[int, str] = {
     2: "Indoor Cycling",
@@ -616,6 +617,7 @@ async def create_workout(
     name: str,
     steps: list[dict],
     sport_type: int = 2,
+    intensity_type: int = 6,
 ) -> str:
     """
     Create a new structured workout program.
@@ -681,9 +683,9 @@ async def create_workout(
                     "name": sub["name"],
                     "exerciseType": 2,
                     "sportType": sport_type,
-                    "intensityType": 6,
-                    "intensityValue": sub["power_low_w"],
-                    "intensityValueExtend": sub.get("power_high_w", 0),
+                    "intensityType": intensity_type,
+                    "intensityValue": sub.get("intensity_low", sub.get("power_low_w", 0)),
+                    "intensityValueExtend": sub.get("intensity_high", sub.get("power_high_w", 0)),
                     "targetType": 2,
                     "targetValue": sub_duration,
                     "sets": 1,
@@ -705,9 +707,9 @@ async def create_workout(
                 "name": step["name"],
                 "exerciseType": 2,
                 "sportType": sport_type,
-                "intensityType": 6,
-                "intensityValue": step["power_low_w"],
-                "intensityValueExtend": step.get("power_high_w", 0),
+                "intensityType": intensity_type,
+                "intensityValue": step.get("intensity_low", step.get("power_low_w", 0)),
+                "intensityValueExtend": step.get("intensity_high", step.get("power_high_w", 0)),
                 "targetType": 2,
                 "targetValue": duration_s,
                 "sets": 1,
