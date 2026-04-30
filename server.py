@@ -680,8 +680,12 @@ async def create_strength_workout(
         - target_type (int): 2=time in seconds, 3=reps
         - target_value (int): number of seconds or reps
         - rest_seconds (int): rest after this exercise (default 60)
+        - sets (int, optional): number of consecutive sets of this exercise
+          (default 1). Use this to get "3 sets of face pull in a row" instead
+          of having to duplicate the exercise entry 3 times.
     sets : int
-        Number of circuit repetitions (default 1).
+        Number of full-circuit repetitions over the whole exercise list
+        (default 1). Distinct from the per-exercise `sets` above.
 
     Returns
     -------

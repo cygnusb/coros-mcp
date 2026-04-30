@@ -887,7 +887,8 @@ async def create_strength_workout(
     for i, ex in enumerate(exercises):
         target_value = ex["target_value"]
         rest = ex.get("rest_seconds", 60)
-        total_duration += (target_value if ex["target_type"] == 2 else 0) + rest
+        ex_sets = ex.get("sets", 1)
+        total_duration += ((target_value if ex["target_type"] == 2 else 0) + rest) * ex_sets
         built.append({
             "access": 0,
             "createTimestamp": 0,
@@ -913,7 +914,7 @@ async def create_strength_workout(
             "groupId": "",
             "restType": 1,
             "restValue": rest,
-            "sets": 1,
+            "sets": ex.get("sets", 1),
             "sortNo": i,
             "sourceUrl": "",
             "sportType": 4,
