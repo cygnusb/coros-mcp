@@ -13,13 +13,10 @@ sync_all() does a full historical backfill in 12-week chunks.
 import asyncio
 import logging
 import os
+from collections.abc import Callable, Coroutine
 from datetime import datetime, timedelta
-from typing import Callable, Coroutine, Optional
-
-logger = logging.getLogger(__name__)
 
 import coros_api
-from cache.utils import LOCAL_TZ
 from cache.store import (
     cache_status,
     get_activities,
@@ -36,8 +33,10 @@ from cache.store import (
     upsert_daily_records,
     upsert_sleep_records,
 )
+from cache.utils import LOCAL_TZ
 from models import ActivitySummary, DailyRecord, SleepRecord, StoredAuth
 
+logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Date helpers
@@ -63,7 +62,7 @@ def _today() -> str:
 STABLE_AFTER_DAYS = int(os.getenv("COROS_STABLE_DAYS", "2"))
 
 
-def _fetch_start(max_cached: Optional[str], requested_start: str) -> str:
+def _fetch_start(max_cached: str | None, requested_start: str) -> str:
     """First date we need to fetch from the API.
 
     For historical data (older than STABLE_AFTER_DAYS), only fetch the
@@ -84,12 +83,12 @@ def _fetch_start(max_cached: Optional[str], requested_start: str) -> str:
 # ---------------------------------------------------------------------------
 
 def _resolve_fetch_range(
-    min_cached: Optional[str],
-    max_cached: Optional[str],
+    min_cached: str | None,
+    max_cached: str | None,
     start_day: str,
     end_day: str,
     cutoff: str,
-) -> Optional[tuple[str, str]]:
+) -> tuple[str, str] | None:
     """Determine the (fetch_from, fetch_to) range needed to satisfy [start_day, end_day].
 
     Returns None when the cache fully covers the requested range and no API
@@ -213,8 +212,8 @@ async def _fetch_all_activity_pages(
 async def sync_all(
     auth: StoredAuth,
     start_day: str,
-    end_day: Optional[str] = None,
-    on_progress: Optional[Callable[[str], Coroutine]] = None,
+    end_day: str | None = None,
+    on_progress: Callable[[str], Coroutine] | None = None,
 ) -> dict:
     """
     Backfill all data from start_day to end_day (default: today) in 12-week chunks.

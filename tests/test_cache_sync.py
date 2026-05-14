@@ -240,6 +240,7 @@ class TestCliRedundantImport:
         """cmd_sync must not contain a local `import asyncio` — it is already
         imported at module level."""
         import inspect
+
         import cli
         src = inspect.getsource(cli.cmd_sync)
         assert "import asyncio" not in src, (

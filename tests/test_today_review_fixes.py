@@ -9,15 +9,15 @@ Covers the gaps not exercised by the existing test suite:
   6. load_dotenv not called at import time
 """
 
+import contextlib
 import importlib
 import os
 import sys
 import unittest
-from datetime import timedelta, timezone
-
-import pytest
+from datetime import UTC, timedelta, timezone
 from unittest.mock import patch
 
+import pytest
 
 # ---------------------------------------------------------------------------
 # 1. _parse_activity — zero values must not fall through to fallback fields
@@ -173,17 +173,17 @@ class TestTodayHonoursCOROSTIMEZONE:
             # Remove COROS_TIMEZONE if not set
             if tz_value is None:
                 os.environ.pop("COROS_TIMEZONE", None)
-            import cache.utils as utils_mod
             import cache.sync as sync_mod
+            import cache.utils as utils_mod
             importlib.reload(utils_mod)
             importlib.reload(sync_mod)
             return sync_mod._today
 
     def test_today_utc_plus8_differs_from_utc_at_midnight(self):
         """At 23:30 UTC, UTC+8 is already the next calendar day."""
-        from datetime import datetime, timezone as tz
+        from datetime import datetime
         # Freeze time to 2026-04-16 23:30 UTC
-        fake_utc = datetime(2026, 4, 16, 23, 30, 0, tzinfo=tz.utc)
+        fake_utc = datetime(2026, 4, 16, 23, 30, 0, tzinfo=UTC)
 
         _today = self._reload_utils_and_sync("8")
 
@@ -218,20 +218,21 @@ class TestTodayHonoursCOROSTIMEZONE:
 class TestCmdSyncArgparse:
 
     def test_unknown_flag_raises_systemexit(self):
-        with patch.object(sys, "argv", ["coros-mcp", "sync", "--unknown-flag"]):
-            with pytest.raises(SystemExit) as exc_info:
-                import cli
-                # Bypass auth by patching; we only care about arg parsing
-                with patch("cli.get_stored_auth", return_value=None), \
-                     patch("cli.try_auto_login", return_value=None):
-                    cli.cmd_sync()
+        with (
+            patch.object(sys, "argv", ["coros-mcp", "sync", "--unknown-flag"]),
+            pytest.raises(SystemExit) as exc_info,
+        ):
+            import cli
+            # Bypass auth by patching; we only care about arg parsing
+            with patch("cli.get_stored_auth", return_value=None), \
+                 patch("cli.try_auto_login", return_value=None):
+                cli.cmd_sync()
         assert exc_info.value.code != 0
 
     def test_help_exits_zero(self):
-        with patch.object(sys, "argv", ["coros-mcp", "sync", "--help"]):
-            with pytest.raises(SystemExit) as exc_info:
-                import cli
-                cli.cmd_sync()
+        with patch.object(sys, "argv", ["coros-mcp", "sync", "--help"]), pytest.raises(SystemExit) as exc_info:
+            import cli
+            cli.cmd_sync()
         assert exc_info.value.code == 0
 
     def test_valid_flags_parsed(self):
@@ -266,9 +267,6 @@ class TestLoadDotenvNotAtImport:
 
         with patch("dotenv.load_dotenv") as mock_load, \
              patch.object(sys, "argv", ["coros-mcp", "help"]), \
-             patch("cli.cmd_help", return_value=0):
-            try:
-                cli.main()
-            except SystemExit:
-                pass
+             patch("cli.cmd_help", return_value=0), contextlib.suppress(SystemExit):
+            cli.main()
         mock_load.assert_called_once()

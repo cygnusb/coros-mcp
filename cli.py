@@ -5,7 +5,7 @@ import sys
 import time
 
 from auth.storage import clear_token, get_token, is_keyring_available
-from coros_api import TOKEN_TTL_MS, get_stored_auth, try_auto_login, login, login_mobile
+from coros_api import TOKEN_TTL_MS, get_stored_auth, login, login_mobile, try_auto_login
 
 
 def _prompt_credentials() -> tuple[str, str, str]:
@@ -136,6 +136,7 @@ def cmd_sync() -> int:
     """Full historical sync: pull all data from Coros and store locally."""
     import argparse
     from datetime import datetime, timedelta
+
     from cache.sync import sync_all
 
     parser = argparse.ArgumentParser(

@@ -10,7 +10,6 @@ import time
 from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
 
 from cache.utils import LOCAL_TZ as _LOCAL_TZ
 from models import ActivitySummary, DailyRecord, SleepRecord
@@ -79,13 +78,13 @@ def get_daily_records(start_day: str, end_day: str) -> list[DailyRecord]:
     return [DailyRecord.model_validate_json(r["data"]) for r in rows]
 
 
-def get_max_daily_date() -> Optional[str]:
+def get_max_daily_date() -> str | None:
     with _conn() as con:
         row = con.execute("SELECT MAX(date) AS d FROM daily_records").fetchone()
     return row["d"] if row and row["d"] else None
 
 
-def get_min_daily_date() -> Optional[str]:
+def get_min_daily_date() -> str | None:
     with _conn() as con:
         row = con.execute("SELECT MIN(date) AS d FROM daily_records").fetchone()
     return row["d"] if row and row["d"] else None
@@ -113,13 +112,13 @@ def get_sleep_records(start_day: str, end_day: str) -> list[SleepRecord]:
     return [SleepRecord.model_validate_json(r["data"]) for r in rows]
 
 
-def get_max_sleep_date() -> Optional[str]:
+def get_max_sleep_date() -> str | None:
     with _conn() as con:
         row = con.execute("SELECT MAX(date) AS d FROM sleep_records").fetchone()
     return row["d"] if row and row["d"] else None
 
 
-def get_min_sleep_date() -> Optional[str]:
+def get_min_sleep_date() -> str | None:
     with _conn() as con:
         row = con.execute("SELECT MIN(date) AS d FROM sleep_records").fetchone()
     return row["d"] if row and row["d"] else None
@@ -178,13 +177,13 @@ def get_activities(start_day: str, end_day: str) -> list[ActivitySummary]:
     return [ActivitySummary.model_validate_json(r["data"]) for r in rows]
 
 
-def get_max_activity_date() -> Optional[str]:
+def get_max_activity_date() -> str | None:
     with _conn() as con:
         row = con.execute("SELECT MAX(start_day) AS d FROM activities").fetchone()
     return row["d"] if row and row["d"] else None
 
 
-def get_min_activity_date() -> Optional[str]:
+def get_min_activity_date() -> str | None:
     with _conn() as con:
         row = con.execute("SELECT MIN(start_day) AS d FROM activities").fetchone()
     return row["d"] if row and row["d"] else None

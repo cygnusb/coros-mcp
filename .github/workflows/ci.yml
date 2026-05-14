@@ -19,6 +19,8 @@ jobs:
         run: pip install -e ".[dev]"
       - name: Lint with ruff
         run: ruff check .
+      - name: Type-check with mypy
+        run: mypy . --exclude tests/
 
   test:
     runs-on: ubuntu-latest
