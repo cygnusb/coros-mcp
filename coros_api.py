@@ -7,23 +7,30 @@ Sleep phase data comes from the mobile API (/coros/data/statistic/daily on apieu
 """
 
 import asyncio
+import contextlib
 import hashlib
 import json
 import os
 import random
 import time
-from typing import Optional
 
 import httpx
 
 from auth.storage import get_token, store_token
-from models import ActivitySummary, DailyRecord, HRVRecord, SleepPhases, SleepRecord, StoredAuth
+from models import (
+    ActivitySummary,
+    DailyRecord,
+    HRVRecord,
+    SleepPhases,
+    SleepRecord,
+    StoredAuth,
+)
 
 # ---------------------------------------------------------------------------
 # Endpoint constants
 # ---------------------------------------------------------------------------
 
-USER_AGENT = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36"
+USER_AGENT = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36"  # noqa: E501
 
 MOBILE_LOGIN_ENDPOINT = "/coros/user/login"
 
@@ -82,7 +89,7 @@ def _save_auth(auth: StoredAuth) -> None:
     store_token(auth.model_dump_json())
 
 
-def _load_auth() -> Optional[StoredAuth]:
+def _load_auth() -> StoredAuth | None:
     result = get_token()
     if not result.success or not result.token:
         return None
@@ -112,8 +119,9 @@ def _mobile_encrypt(plaintext: str, app_key: str) -> str:
       3. AES-128-CBC encrypt: key = appKey bytes, IV = 'weloop3_2015_03#'
       4. Base64-encode the ciphertext
     """
-    from Crypto.Cipher import AES
     import base64
+
+    from Crypto.Cipher import AES
 
     key = app_key.encode("ascii")
     data = plaintext.encode("utf-8")
@@ -217,10 +225,8 @@ async def login(email: str, password: str, region: str = "eu", *, skip_mobile: b
     mobile_token = None
     mobile_payload = None
     if not skip_mobile:
-        try:
+        with contextlib.suppress(Exception):
             mobile_token, mobile_payload = await _mobile_login(email, password, region)
-        except Exception:
-            pass  # mobile login is best-effort; sleep data will fail gracefully
 
     auth = StoredAuth(
         access_token=data["accessToken"],
@@ -263,9 +269,9 @@ async def login_mobile(email: str, password: str, region: str = "eu") -> StoredA
     return auth
 
 
-def get_stored_auth() -> Optional[StoredAuth]:
+def get_stored_auth() -> StoredAuth | None:
     """Return stored auth if it exists and is not expired.
-    
+
     When COROS_ACCESS_TOKEN env var is set, it takes precedence over
     stored keyring/encrypted-file auth (for MCP server use cases where
     keyring is not accessible in the subprocess).
@@ -291,7 +297,7 @@ def get_stored_auth() -> Optional[StoredAuth]:
     return None
 
 
-def get_env_credentials() -> Optional[tuple[str, str, str]]:
+def get_env_credentials() -> tuple[str, str, str] | None:
     """Return (email, password, region) from env vars, or None if not fully set."""
     email = os.environ.get("COROS_EMAIL")
     password = os.environ.get("COROS_PASSWORD")
@@ -301,7 +307,7 @@ def get_env_credentials() -> Optional[tuple[str, str, str]]:
     return None
 
 
-async def try_auto_login() -> Optional[StoredAuth]:
+async def try_auto_login() -> StoredAuth | None:
     """Attempt login using COROS_EMAIL/PASSWORD env vars. Returns None on failure.
 
     Always skips mobile login — the mobile token is obtained lazily on the first
@@ -448,11 +454,16 @@ async def fetch_daily_records(
             date = str(item.get("happenDay", ""))
             if date in records_by_date:
                 rec = records_by_date[date]
-                if (v := item.get("vo2max")) is not None: rec.vo2max = v
-                if (v := item.get("lthr")) is not None: rec.lthr = v
-                if (v := item.get("ltsp")) is not None: rec.ltsp = v
-                if (v := item.get("staminaLevel")) is not None: rec.stamina_level = v
-                if (v := item.get("staminaLevel7d")) is not None: rec.stamina_level_7d = v
+                if (v := item.get("vo2max")) is not None:
+                    rec.vo2max = v
+                if (v := item.get("lthr")) is not None:
+                    rec.lthr = v
+                if (v := item.get("ltsp")) is not None:
+                    rec.ltsp = v
+                if (v := item.get("staminaLevel")) is not None:
+                    rec.stamina_level = v
+                if (v := item.get("staminaLevel7d")) is not None:
+                    rec.stamina_level_7d = v
 
     return sorted(records_by_date.values(), key=lambda r: r.date)
 
@@ -492,8 +503,12 @@ def _parse_activity(item: dict) -> ActivitySummary:
         training_load=item.get("trainingLoad"),
         avg_power=item.get("avgPower"),
         normalized_power=item.get("np"),
-        elevation_gain=item.get("ascent") if item.get("ascent") is not None else (item.get("totalAscent") if item.get("totalAscent") is not None else item.get("elevationGain")),
-        elevation_loss=item.get("descent") if item.get("descent") is not None else item.get("totalDescent"),
+        elevation_gain=(
+            item.get("ascent")
+            if item.get("ascent") is not None
+            else (item.get("totalAscent") if item.get("totalAscent") is not None else item.get("elevationGain"))
+        ),
+        elevation_loss=item.get("descent") if item.get("descent") is not None else item.get("totalDescent"),  # noqa: E501
     )
 
 
@@ -503,7 +518,7 @@ async def fetch_activities(
     end_day: str,
     page: int = 1,
     size: int = 30,
-    mode_list: Optional[list[int]] = None,
+    mode_list: list[int] | None = None,
 ) -> tuple[list[ActivitySummary], int]:
     """
     Fetch activity list for a date range.
@@ -765,7 +780,7 @@ async def delete_workout(auth: StoredAuth, workout_id: str) -> None:
 
 async def fetch_schedule(
     auth: StoredAuth, start_day: str, end_day: str
-) -> list[dict]:
+) -> dict:
     """
     Fetch planned activities from the Coros training calendar.
 
@@ -993,7 +1008,7 @@ async def create_strength_workout(
     return str(body.get("data", ""))
 
 
-async def _fetch_raw_workout(auth: StoredAuth, workout_id: str) -> Optional[dict]:
+async def _fetch_raw_workout(auth: StoredAuth, workout_id: str) -> dict | None:
     """Return the raw workout object for a given ID from the workout list."""
     async with httpx.AsyncClient(timeout=30) as client:
         resp = await client.post(
@@ -1076,7 +1091,7 @@ async def remove_scheduled_workout(
     auth: StoredAuth,
     plan_id: str,
     id_in_plan: str,
-    plan_program_id: Optional[str] = None,
+    plan_program_id: str | None = None,
 ) -> None:
     """
     Remove a scheduled workout from the Coros training calendar.
@@ -1193,9 +1208,8 @@ async def _ensure_mobile_token(auth: StoredAuth) -> bool:
         return True
 
     # Try refreshing via the stored encrypted payload (avoids re-entering creds)
-    if auth.mobile_login_payload:
-        if await _refresh_mobile_token(auth):
-            return True
+    if auth.mobile_login_payload and await _refresh_mobile_token(auth):
+        return True
 
     # Fall back to a fresh mobile login using env credentials
     creds = get_env_credentials()
@@ -1256,9 +1270,8 @@ async def fetch_sleep(auth: StoredAuth, start_day: str, end_day: str) -> list[Sl
 
     body = await _do_request(auth.mobile_access_token)
 
-    if body.get("result") == "1019":  # token expired — auto-refresh once
-        if await _refresh_mobile_token(auth):
-            body = await _do_request(auth.mobile_access_token)
+    if body.get("result") == "1019" and await _refresh_mobile_token(auth):  # token expired — auto-refresh once
+        body = await _do_request(auth.mobile_access_token)
 
     if body.get("result") != "0000":
         raise ValueError(f"Coros sleep API error: {body.get('message', 'unknown error')}")

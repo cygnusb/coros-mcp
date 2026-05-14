@@ -24,20 +24,24 @@ from dotenv import load_dotenv
 from fastmcp import FastMCP
 
 import coros_api
-from coros_api import TOKEN_TTL_MS
 from cache.store import cache_status, init_db
-from cache.utils import LOCAL_TZ, fmt_local_time
 from cache.sync import (
     fetch_activities_cached,
     fetch_daily_records_cached,
     fetch_sleep_cached,
+)
+from cache.sync import (
     sync_all as _sync_all,
 )
+from cache.utils import LOCAL_TZ, fmt_local_time
+from coros_api import TOKEN_TTL_MS
 
 load_dotenv()
 init_db()
 
 mcp = FastMCP("coros-mcp")
+
+_NOT_AUTHENTICATED = "Not authenticated. Set COROS_EMAIL and COROS_PASSWORD in .env or call authenticate_coros."  # noqa: E501
 
 
 async def _get_auth():
@@ -84,23 +88,23 @@ async def get_help() -> dict:
     return {
         "tools": [
             {"name": "get_help", "description": "List all available tools (this tool)"},
-            {"name": "authenticate_coros", "description": "Log in with email/password; stores web API token (required before all data tools)"},
-            {"name": "authenticate_coros_mobile", "description": "Add mobile token for sleep stage data (deep/light/REM/awake)"},
+            {"name": "authenticate_coros", "description": "Log in with email/password; stores web API token (required before all data tools)"},  # noqa: E501
+            {"name": "authenticate_coros_mobile", "description": "Add mobile token for sleep stage data (deep/light/REM/awake)"},  # noqa: E501
             {"name": "check_coros_auth", "description": "Show current auth status, region, and token expiry"},
-            {"name": "get_daily_metrics", "description": "Fetch daily training metrics: HRV, sleep hours, steps, stress, resting HR, VO2max, fitness score"},
-            {"name": "get_sleep_data", "description": "Fetch nightly sleep records with duration and quality score (mobile auth required for stage breakdown)"},
-            {"name": "list_activities", "description": "List recorded activities (runs, rides, swims, etc.) with summaries"},
+            {"name": "get_daily_metrics", "description": "Fetch daily training metrics: HRV, sleep hours, steps, stress, resting HR, VO2max, fitness score"},  # noqa: E501
+            {"name": "get_sleep_data", "description": "Fetch nightly sleep records with duration and quality score (mobile auth required for stage breakdown)"},  # noqa: E501
+            {"name": "list_activities", "description": "List recorded activities (runs, rides, swims, etc.) with summaries"},  # noqa: E501
             {"name": "get_activity_detail", "description": "Get full detail for one activity by label_id"},
-            {"name": "list_workouts", "description": "List planned structured workouts saved in the Coros Training Hub"},
+            {"name": "list_workouts", "description": "List planned structured workouts saved in the Coros Training Hub"},  # noqa: E501
             {"name": "create_workout", "description": "Create a new structured workout with intervals and steps"},
             {"name": "delete_workout", "description": "Delete a workout by workout_id"},
             {"name": "list_planned_activities", "description": "List workouts scheduled on the training calendar"},
             {"name": "schedule_workout", "description": "Schedule a workout on a specific date"},
             {"name": "remove_scheduled_workout", "description": "Remove a workout from the training calendar"},
             {"name": "create_strength_workout", "description": "Create a strength/gym workout with exercises and sets"},
-            {"name": "list_exercises", "description": "List available strength exercises (used when building strength workouts)"},
+            {"name": "list_exercises", "description": "List available strength exercises (used when building strength workouts)"},  # noqa: E501
             {"name": "sync_coros_data", "description": "Backfill local cache from the Coros API for a date range"},
-            {"name": "get_cache_status", "description": "Show local cache coverage: date ranges stored for each data type"},
+            {"name": "get_cache_status", "description": "Show local cache coverage: date ranges stored for each data type"},  # noqa: E501
         ]
     }
 
@@ -280,7 +284,7 @@ async def get_daily_metrics(weeks: int = 4) -> dict:
     auth = await _get_auth()
     if auth is None:
         return {
-            "error": "Not authenticated. Set COROS_EMAIL and COROS_PASSWORD in .env or call authenticate_coros.",
+            "error": _NOT_AUTHENTICATED,
             "records": [],
         }
 
@@ -338,7 +342,7 @@ async def get_sleep_data(weeks: int = 4) -> dict:
     """
     auth = await _get_auth()
     if auth is None:
-        return {"error": "Not authenticated. Set COROS_EMAIL and COROS_PASSWORD in .env or call authenticate_coros.", "records": []}
+        return {"error": _NOT_AUTHENTICATED, "records": []}
 
     weeks = max(1, min(weeks, 52))
     end_dt = datetime.now(tz=LOCAL_TZ) if LOCAL_TZ is not None else datetime.now()
@@ -394,7 +398,7 @@ async def list_activities(
     """
     auth = await _get_auth()
     if auth is None:
-        return {"error": "Not authenticated. Set COROS_EMAIL and COROS_PASSWORD in .env or call authenticate_coros.", "activities": []}
+        return {"error": _NOT_AUTHENTICATED, "activities": []}
     try:
         activities, total = await _run_with_auth(fetch_activities_cached, auth, start_day, end_day, page, size)
         result = []
@@ -436,7 +440,7 @@ async def get_activity_detail(activity_id: str, sport_type: int = 0) -> dict:
     """
     auth = await _get_auth()
     if auth is None:
-        return {"error": "Not authenticated. Set COROS_EMAIL and COROS_PASSWORD in .env or call authenticate_coros."}
+        return {"error": _NOT_AUTHENTICATED}
     try:
         return await _run_with_auth(coros_api.fetch_activity_detail, auth, activity_id, sport_type)
     except Exception as exc:
@@ -461,7 +465,7 @@ async def list_workouts() -> dict:
     """
     auth = await _get_auth()
     if auth is None:
-        return {"error": "Not authenticated. Set COROS_EMAIL and COROS_PASSWORD in .env or call authenticate_coros.", "workouts": []}
+        return {"error": _NOT_AUTHENTICATED, "workouts": []}
     try:
         workouts = await _run_with_auth(coros_api.fetch_workouts, auth)
         return {"workouts": workouts, "count": len(workouts)}
@@ -513,21 +517,21 @@ async def create_workout(
             ]},
             {"name": "Cool-down", "duration_minutes": 10, "intensity_low": 100, "intensity_high": 165},
         ]
-        
+
     sport_type : int
         Sport type ID. Default 2 = Indoor Cycling (Rollen).
         Use 200 for Road Bike (outdoor), 201 for Indoor Cycling (alt).
     intensity_type : int
         Intensity type ID. Default 6 = power in watts.
         Other IntensityType values: 1=weight, 2=HR, 3=pace, 4=speed, 5=none, 6=power, 7=cadence
-        
+
     Returns
     -------
     dict with keys: workout_id, name, total_minutes, steps_count, message
     """
     auth = await _get_auth()
     if auth is None:
-        return {"error": "Not authenticated. Set COROS_EMAIL and COROS_PASSWORD in .env or call authenticate_coros."}
+        return {"error": _NOT_AUTHENTICATED}
     try:
         workout_id = await _run_with_auth(coros_api.create_workout, auth, name, steps, sport_type, intensity_type)
         total_minutes, steps_count = _summarize_steps(steps)
@@ -564,7 +568,7 @@ async def delete_workout(
     """
     auth = await _get_auth()
     if auth is None:
-        return {"error": "Not authenticated. Set COROS_EMAIL and COROS_PASSWORD in .env or call authenticate_coros."}
+        return {"error": _NOT_AUTHENTICATED}
     try:
         await _run_with_auth(coros_api.delete_workout, auth, workout_id)
         return {
@@ -602,7 +606,7 @@ async def list_planned_activities(
     """
     auth = await _get_auth()
     if auth is None:
-        return {"error": "Not authenticated. Set COROS_EMAIL and COROS_PASSWORD in .env or call authenticate_coros.", "schedule": {}}
+        return {"error": _NOT_AUTHENTICATED, "schedule": {}}
     try:
         items = await _run_with_auth(coros_api.fetch_schedule, auth, start_day, end_day)
         return {
@@ -642,7 +646,7 @@ async def schedule_workout(
     """
     auth = await _get_auth()
     if auth is None:
-        return {"error": "Not authenticated. Set COROS_EMAIL and COROS_PASSWORD in .env or call authenticate_coros."}
+        return {"error": _NOT_AUTHENTICATED}
     try:
         await _run_with_auth(coros_api.schedule_workout, auth, workout_id, happen_day, sort_no)
         return {"scheduled": True, "workout_id": workout_id, "happen_day": happen_day}
@@ -678,7 +682,7 @@ async def remove_scheduled_workout(
     """
     auth = await _get_auth()
     if auth is None:
-        return {"error": "Not authenticated. Set COROS_EMAIL and COROS_PASSWORD in .env or call authenticate_coros."}
+        return {"error": _NOT_AUTHENTICATED}
     try:
         await _run_with_auth(
             coros_api.remove_scheduled_workout, auth, plan_id, id_in_plan, plan_program_id or None
@@ -725,7 +729,7 @@ async def create_strength_workout(
     """
     auth = await _get_auth()
     if auth is None:
-        return {"error": "Not authenticated. Set COROS_EMAIL and COROS_PASSWORD in .env or call authenticate_coros."}
+        return {"error": _NOT_AUTHENTICATED}
     try:
         workout_id = await _run_with_auth(coros_api.create_strength_workout, auth, name, exercises, sets)
         return {
@@ -761,7 +765,7 @@ async def list_exercises(sport_type: int = 4) -> dict:
     """
     auth = await _get_auth()
     if auth is None:
-        return {"error": "Not authenticated. Set COROS_EMAIL and COROS_PASSWORD in .env or call authenticate_coros.", "exercises": []}
+        return {"error": _NOT_AUTHENTICATED, "exercises": []}
     try:
         items = await _run_with_auth(coros_api.fetch_exercises, auth, sport_type)
         return {"exercises": items, "count": len(items), "sport_type": sport_type}
