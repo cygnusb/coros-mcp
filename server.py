@@ -17,6 +17,7 @@ server authenticates automatically on the first request and re-authenticates
 transparently whenever the stored token is expired or rejected.
 """
 
+import json
 import time
 from datetime import datetime, timedelta
 
@@ -458,8 +459,7 @@ def _compact_activity(data: dict) -> dict:
                 for item in items
             ]
             # Deduplicate identical laps (e.g. climbing type=2 and type=3 are copies)
-            import json as _json
-            lap_hash = _json.dumps(new_lap["lapItemList"], sort_keys=True)
+            lap_hash = json.dumps(new_lap["lapItemList"], sort_keys=True)
             if lap_hash not in seen_hashes:
                 seen_hashes.add(lap_hash)
                 compacted_laps.append(new_lap)
