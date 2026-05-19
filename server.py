@@ -719,6 +719,11 @@ async def create_strength_workout(
         - sets (int, optional): number of consecutive sets of this exercise
           (default 1). Use this to get "3 sets of face pull in a row" instead
           of having to duplicate the exercise entry 3 times.
+        - weight_kg (float, optional): prescribed weight in kg
+          (omit or 0 = no weight set, suitable for bodyweight exercises).
+          For dumbbell exercises this is the per-hand weight by convention.
+          Note: the Coros app shows only a single weight per exercise — it
+          does not render ranges, so a high/low pair is not supported.
     sets : int
         Number of full-circuit repetitions over the whole exercise list
         (default 1). Distinct from the per-exercise `sets` above.

@@ -894,6 +894,11 @@ async def create_strength_workout(
       - target_type: int — 2=time (seconds), 3=reps
       - target_value: int — seconds or reps
       - rest_seconds: int — rest after this exercise
+      - weight_kg: float (optional) — prescribed weight in kg
+        (0 or omitted = no weight set, suitable for bodyweight exercises).
+        For DB exercises, by convention this is the per-hand weight.
+        Note: the Coros app does not display weight ranges, only single
+        values — so a range field is intentionally not supported.
 
     sets: number of circuit repetitions.
 
@@ -906,6 +911,13 @@ async def create_strength_workout(
         target_value = ex["target_value"]
         rest = ex.get("rest_seconds", 60)
         ex_sets = max(1, int(ex.get("sets", 1)))
+        weight_kg = float(ex.get("weight_kg", 0) or 0)
+        # Coros app mirrors weight into intensityPercent as kg × 1_000_000
+        # (verified by inspecting a workout edited in the official client).
+        # The *Extend fields are part of the schema but unused by the app's UI,
+        # so we always leave them at 0.
+        intensity_value = int(weight_kg * 1000)
+        intensity_percent = int(weight_kg * 1_000_000)
         total_duration += ((target_value if ex["target_type"] == 2 else 0) + rest) * ex_sets
         built.append({
             "access": 0,
@@ -916,10 +928,10 @@ async def create_strength_workout(
             "intensityCustom": 0,
             "intensityDisplayUnit": "6",
             "intensityMultiplier": 0,
-            "intensityPercent": 0,
+            "intensityPercent": intensity_percent,
             "intensityPercentExtend": 0,
             "intensityType": 1,
-            "intensityValue": 0,
+            "intensityValue": intensity_value,
             "intensityValueExtend": 0,
             "isDefaultAdd": 0,
             "isGroup": False,
