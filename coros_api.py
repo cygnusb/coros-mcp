@@ -910,18 +910,26 @@ async def create_strength_workout(
 
     Returns the new workout ID.
     """
+    if not exercises:
+        raise ValueError("create_strength_workout requires at least one exercise")
+
     sets = max(1, sets)
 
     # Fetch the strength catalog so we can copy per-exercise muscle / equipment /
     # body-part metadata into each workout exercise. Without these, the Coros app
     # cannot render the Training Machines / Training Parts sections, and the
     # "Bodyweight" label on un-weighted exercises doesn't render either.
-    catalog = await fetch_exercises(auth, 4)
-    by_id = {str(e.get("id")): e for e in catalog}
+    # If the catalog endpoint is down or rate-limited the workout still
+    # creates — only the diagram metadata is lost.
+    try:
+        catalog = await fetch_exercises(auth, 4)
+        by_id = {str(e.get("id")): e for e in catalog}
+    except Exception:
+        by_id = {}
 
     built = []
     total_duration = 0
-    for i, ex in enumerate(exercises):
+    for ex in exercises:
         target_value = ex["target_value"]
 
         # Rest encoding: rest_seconds=0 → restType=3 ("Skip rests"),
