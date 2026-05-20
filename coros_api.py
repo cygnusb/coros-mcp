@@ -1032,6 +1032,7 @@ async def create_strength_workout(
             "sets": ex_sets,
             "sourceId": "0",
             "sportType": 4,
+            "status": 1,
             "subType": 0,
             "targetDisplayUnit": 0,
             "targetType": ex["target_type"],
