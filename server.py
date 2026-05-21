@@ -17,6 +17,7 @@ server authenticates automatically on the first request and re-authenticates
 transparently whenever the stored token is expired or rejected.
 """
 
+import json
 import time
 from datetime import datetime, timedelta
 
@@ -420,6 +421,53 @@ async def list_activities(
 # Tool: get_activity_detail
 # ---------------------------------------------------------------------------
 
+def _compact_activity(data: dict) -> dict:
+    """Strip zero/null/empty fields from activity detail to reduce token count.
+
+    Keeps the full ``summary`` (already small) and ``zoneList``, but compacts
+    ``lapList`` items by dropping zero-value keys and per-item fields that are
+    constant or irrelevant for analysis.  Also drops top-level keys that are
+    rarely useful (``userInfo``, ``userProfile``, ``deviceList``).
+    Deduplicates identical laps (common in climbing activities).
+
+    Typical reduction: ~125 k chars → ~15-25 k chars (80-85%).
+    """
+    drop_top = {"userInfo", "userProfile", "deviceList", "newMessageCount", "level"}
+    # Per-item fields that are constant across items or useless for analysis
+    drop_item = {
+        "sportType", "speedUnit", "exerciseNameKey", "exerciseType", "exerciseIndex",
+        "routeIndex", "pitchIndex", "programExerciseIndex", "sectionIndex", "setIndex",
+        "stageIndex", "sportStage", "sourceType", "lapTrainIndex", "lapType",
+        "intensityType", "intensityValue", "indexInOriginLap", "locationType",
+        "lapMapMarkIsStartGps", "waterTemperature", "tempc", "showRestMode",
+        "startGpsLat", "startGpsLon", "startGpsTimestamp",
+        "endGpsLat", "endGpsLon", "endGpsTimestamp",
+    }
+
+    out = {k: v for k, v in data.items() if k not in drop_top}
+
+    if "lapList" in out:
+        compacted_laps = []
+        seen_hashes: set[str] = set()
+        for lap in out["lapList"]:
+            new_lap = {k: v for k, v in lap.items() if k != "lapItemList"}
+            items = lap.get("lapItemList", [])
+            new_lap["lapItemList"] = [
+                {k: v for k, v in item.items()
+                 if v is not None and v != 0 and v != "" and v != [] and v is not False
+                 and k not in drop_item}
+                for item in items
+            ]
+            # Deduplicate identical laps (e.g. climbing type=2 and type=3 are copies)
+            lap_hash = json.dumps(new_lap["lapItemList"], sort_keys=True)
+            if lap_hash not in seen_hashes:
+                seen_hashes.add(lap_hash)
+                compacted_laps.append(new_lap)
+        out["lapList"] = compacted_laps
+
+    return out
+
+
 @mcp.tool()
 async def get_activity_detail(activity_id: str, sport_type: int = 0) -> dict:
     """
@@ -435,14 +483,18 @@ async def get_activity_detail(activity_id: str, sport_type: int = 0) -> dict:
 
     Returns
     -------
-    dict with full activity data including laps, HR zones, power metrics,
+    dict with activity data including laps, HR zones, power metrics,
     elevation, and all available sport-specific fields.
+    Zero-value fields are stripped from lap items for efficiency (~120k → ~5-8k).
     """
     auth = await _get_auth()
     if auth is None:
         return {"error": _NOT_AUTHENTICATED}
     try:
-        return await _run_with_auth(coros_api.fetch_activity_detail, auth, activity_id, sport_type)
+        data = await _run_with_auth(coros_api.fetch_activity_detail, auth, activity_id, sport_type)
+        if "error" not in data:
+            data = _compact_activity(data)
+        return data
     except Exception as exc:
         return {"error": str(exc)}
 
