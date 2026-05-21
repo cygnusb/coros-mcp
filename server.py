@@ -63,6 +63,24 @@ async def _run_with_auth(fn, auth, *args, **kwargs):
         return await fn(new_auth, *args, **kwargs)
 
 
+_ENRICHMENT_WARNING = (
+    "Schedule POST succeeded but enrichment GET could not resolve "
+    "plan_id/plan_program_id/entity_id. remove_scheduled_workout will not "
+    "work with this response — call list_planned_activities for the day to "
+    "look up the missing identifiers."
+)
+
+
+def _attach_enrichment_warning(result: dict, response: dict) -> dict:
+    """Add a top-level `warning` key to `result` if the inline-schedule
+    enrichment GET could not populate the server-assigned identifiers.
+    Default to False when the key is absent so a missing flag surfaces
+    as a warning (safer than silent omission)."""
+    if not response.get("enrichment_ok", False):
+        result["warning"] = _ENRICHMENT_WARNING
+    return result
+
+
 def _summarize_steps(steps: list[dict]) -> tuple[float, int]:
     """Return (total_minutes, steps_count) for a workout step list."""
     total_minutes = 0.0
@@ -95,13 +113,15 @@ async def get_help() -> dict:
             {"name": "get_sleep_data", "description": "Fetch nightly sleep records with duration and quality score (mobile auth required for stage breakdown)"},  # noqa: E501
             {"name": "list_activities", "description": "List recorded activities (runs, rides, swims, etc.) with summaries"},  # noqa: E501
             {"name": "get_activity_detail", "description": "Get full detail for one activity by label_id"},
-            {"name": "list_workouts", "description": "List planned structured workouts saved in the Coros Training Hub"},  # noqa: E501
-            {"name": "create_workout", "description": "Create a new structured workout with intervals and steps"},
-            {"name": "delete_workout", "description": "Delete a workout by workout_id"},
+            {"name": "list_workout_templates", "description": "List reusable workout templates saved in the Coros library"},  # noqa: E501
+            {"name": "save_workout_template", "description": "Save a reusable cycling/intervals workout template to the library"},  # noqa: E501
+            {"name": "save_strength_workout_template", "description": "Save a reusable strength workout template to the library"},  # noqa: E501
+            {"name": "delete_workout_template", "description": "Delete a saved workout template by workout_id"},
             {"name": "list_planned_activities", "description": "List workouts scheduled on the training calendar"},
-            {"name": "schedule_workout", "description": "Schedule a workout on a specific date"},
+            {"name": "schedule_workout", "description": "Schedule a one-off cycling/intervals workout for a date (no library entry)"},  # noqa: E501
+            {"name": "schedule_strength_workout", "description": "Schedule a one-off strength workout for a date (no library entry)"},  # noqa: E501
+            {"name": "schedule_workout_template", "description": "Schedule an existing library workout template on a specific date"},  # noqa: E501
             {"name": "remove_scheduled_workout", "description": "Remove a workout from the training calendar"},
-            {"name": "create_strength_workout", "description": "Create a strength/gym workout with exercises and sets"},
             {"name": "list_exercises", "description": "List available strength exercises (used when building strength workouts)"},  # noqa: E501
             {"name": "sync_coros_data", "description": "Backfill local cache from the Coros API for a date range"},
             {"name": "get_cache_status", "description": "Show local cache coverage: date ranges stored for each data type"},  # noqa: E501
@@ -448,18 +468,23 @@ async def get_activity_detail(activity_id: str, sport_type: int = 0) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# Tool: list_workouts
+# Tool: list_workout_templates
 # ---------------------------------------------------------------------------
 
 @mcp.tool()
-async def list_workouts() -> dict:
+async def list_workout_templates() -> dict:
     """
-    List all saved workout programs in the Coros account.
+    List reusable workout templates saved in the Coros library.
+
+    These are templates created by save_workout_template /
+    save_strength_workout_template — schedulable later via
+    schedule_workout_template. One-off workouts scheduled with
+    schedule_workout / schedule_strength_workout do NOT appear here.
 
     Returns
     -------
     dict with keys: workouts (list), count
-    Each workout contains: id, name, sport_type, sport_name,
+    Each entry contains: id, name, sport_type, sport_name,
     estimated_time_seconds, exercise_count, exercises (list of steps with
     name, duration_seconds, intensity_low, intensity_high, sets)
     """
@@ -467,28 +492,42 @@ async def list_workouts() -> dict:
     if auth is None:
         return {"error": _NOT_AUTHENTICATED, "workouts": []}
     try:
-        workouts = await _run_with_auth(coros_api.fetch_workouts, auth)
+        workouts = await _run_with_auth(coros_api.fetch_workout_templates, auth)
         return {"workouts": workouts, "count": len(workouts)}
     except Exception as exc:
         return {"error": str(exc), "workouts": []}
 
 
 # ---------------------------------------------------------------------------
-# Tool: create_workout
+# Tool: save_workout_template
 # ---------------------------------------------------------------------------
 
 @mcp.tool()
-async def create_workout(
+async def save_workout_template(
     name: str,
     steps: list[dict],
     sport_type: int = 2,
     intensity_type: int = 6,
 ) -> dict:
     """
-    Create a new structured workout in the Coros account.
+    Save a REUSABLE cycling/intervals workout TEMPLATE to the Coros library.
 
-    The workout appears in the Coros app under Workouts and can be synced
-    to the watch for guided execution.
+    ⚠️ This persists to the library indefinitely. Use ONLY when the user
+    explicitly asks to "save as a template", "create a workout in my
+    library", "add to my workout list", or otherwise indicates they want
+    a reusable template.
+
+    For a ONE-OFF workout for a specific date — the common case — use
+    schedule_workout instead. That tool builds the workout inline and
+    leaves no library residue.
+
+    If the user's intent is unclear, ASK THEM:
+      "Do you want this saved as a reusable template in your library, or
+       just scheduled as a one-off for [date]?"
+    Don't guess.
+
+    The saved template appears in the Coros app under Workouts and can be
+    synced to the watch for guided execution.
 
     Parameters
     ----------
@@ -533,7 +572,9 @@ async def create_workout(
     if auth is None:
         return {"error": _NOT_AUTHENTICATED}
     try:
-        workout_id = await _run_with_auth(coros_api.create_workout, auth, name, steps, sport_type, intensity_type)
+        workout_id = await _run_with_auth(
+            coros_api.save_workout_template, auth, name, steps, sport_type, intensity_type
+        )
         total_minutes, steps_count = _summarize_steps(steps)
         return {
             "workout_id": workout_id,
@@ -547,20 +588,20 @@ async def create_workout(
 
 
 # ---------------------------------------------------------------------------
-# Tool: delete_workout
+# Tool: delete_workout_template
 # ---------------------------------------------------------------------------
 
 @mcp.tool()
-async def delete_workout(
+async def delete_workout_template(
     workout_id: str,
 ) -> dict:
     """
-    Delete a workout program from the Coros account.
+    Delete a saved workout TEMPLATE from the Coros library.
 
     Parameters
     ----------
     workout_id : str
-        The workout ID to delete (from list_workouts).
+        The workout ID to delete (from list_workout_templates).
 
     Returns
     -------
@@ -570,11 +611,11 @@ async def delete_workout(
     if auth is None:
         return {"error": _NOT_AUTHENTICATED}
     try:
-        await _run_with_auth(coros_api.delete_workout, auth, workout_id)
+        await _run_with_auth(coros_api.delete_workout_template, auth, workout_id)
         return {
             "deleted": True,
             "workout_id": workout_id,
-            "message": "Workout deleted.",
+            "message": "Workout template deleted.",
         }
     except Exception as exc:
         return {"error": str(exc)}
@@ -619,22 +660,28 @@ async def list_planned_activities(
 
 
 # ---------------------------------------------------------------------------
-# Tool: schedule_workout
+# Tool: schedule_workout_template
 # ---------------------------------------------------------------------------
 
 @mcp.tool()
-async def schedule_workout(
+async def schedule_workout_template(
     workout_id: str,
     happen_day: str,
     sort_no: int = 1,
 ) -> dict:
     """
-    Add an existing workout from the library to the Coros training calendar.
+    Add an existing library workout TEMPLATE to the training calendar.
+
+    Use this only when scheduling a previously-saved template by ID. For a
+    one-off workout that doesn't need to live in the library, use the
+    inline tools instead: schedule_workout (cycling/intervals) or
+    schedule_strength_workout (strength).
 
     Parameters
     ----------
     workout_id : str
-        ID of the workout to schedule (from list_workouts or create_workout).
+        ID of the workout template to schedule (from list_workout_templates,
+        save_workout_template, or save_strength_workout_template).
     happen_day : str
         Date in YYYYMMDD format.
     sort_no : int
@@ -642,14 +689,203 @@ async def schedule_workout(
 
     Returns
     -------
-    dict with keys: scheduled, workout_id, happen_day
+    dict with keys: scheduled, workout_id, happen_day, response, and
+    optionally 'warning' if enrichment lookup failed.
+
+    The 'response' dict contains the server-assigned identifiers needed to
+    later remove this calendar entry: plan_id, id_in_plan, plan_program_id,
+    entity_id, plus enrichment_ok. When enrichment_ok is True, pipe the
+    response into remove_scheduled_workout directly. When False, a top-level
+    'warning' key is set — the schedule POST succeeded but plan_id /
+    plan_program_id / entity_id are empty strings, so look them up via
+    list_planned_activities before calling remove_scheduled_workout.
     """
     auth = await _get_auth()
     if auth is None:
         return {"error": _NOT_AUTHENTICATED}
     try:
-        await _run_with_auth(coros_api.schedule_workout, auth, workout_id, happen_day, sort_no)
-        return {"scheduled": True, "workout_id": workout_id, "happen_day": happen_day}
+        response = await _run_with_auth(
+            coros_api.schedule_workout_template, auth, workout_id, happen_day, sort_no
+        )
+        return _attach_enrichment_warning(
+            {
+                "scheduled": True,
+                "workout_id": workout_id,
+                "happen_day": happen_day,
+                "response": response,
+            },
+            response,
+        )
+    except Exception as exc:
+        return {"error": str(exc), "scheduled": False}
+
+
+# ---------------------------------------------------------------------------
+# Tool: schedule_workout (inline, one-off cycling/intervals)
+# ---------------------------------------------------------------------------
+
+@mcp.tool()
+async def schedule_workout(
+    name: str,
+    steps: list[dict],
+    happen_day: str,
+    sport_type: int = 2,
+    intensity_type: int = 6,
+    sort_no: int = 1,
+) -> dict:
+    """
+    Schedule a ONE-OFF cycling/intervals workout for a specific date.
+
+    This is the COMMON case. Use this whenever the user wants a workout
+    on a specific date and doesn't explicitly ask for a reusable template.
+    Does NOT save to the Coros library — leaves no template behind.
+
+    For a REUSABLE library template instead, use save_workout_template
+    (which saves it for re-scheduling later via schedule_workout_template).
+
+    If the user's intent is unclear, ASK THEM:
+      "Do you want this saved as a reusable template in your library, or
+       just scheduled as a one-off for [date]?"
+    Don't guess.
+
+    Parameters
+    ----------
+    name : str
+        Workout name as it should appear on the calendar.
+    steps : list[dict]
+        Same shape as save_workout_template: plain steps or repeat groups.
+    happen_day : str
+        Date in YYYYMMDD format.
+    sport_type : int
+        Sport type ID (default 2 = Indoor Cycling).
+    intensity_type : int
+        Intensity type ID (default 6 = power in watts).
+    sort_no : int
+        Order within the day (default 1).
+
+    Returns
+    -------
+    dict with keys: scheduled, name, happen_day, total_minutes, steps_count,
+    response, and optionally 'warning' if enrichment lookup failed.
+
+    The 'response' dict contains the server-assigned identifiers needed to
+    later remove this calendar entry: plan_id, id_in_plan, plan_program_id,
+    entity_id, plus enrichment_ok. When enrichment_ok is True, pipe the
+    response into remove_scheduled_workout directly. When False, a top-level
+    'warning' key is set — the schedule POST succeeded but plan_id /
+    plan_program_id / entity_id are empty strings, so look them up via
+    list_planned_activities before calling remove_scheduled_workout.
+    """
+    auth = await _get_auth()
+    if auth is None:
+        return {"error": _NOT_AUTHENTICATED}
+    try:
+        response = await _run_with_auth(
+            coros_api.schedule_workout,
+            auth,
+            name,
+            steps,
+            happen_day,
+            sport_type,
+            intensity_type,
+            sort_no,
+        )
+        total_minutes, steps_count = _summarize_steps(steps)
+        return _attach_enrichment_warning(
+            {
+                "scheduled": True,
+                "name": name,
+                "happen_day": happen_day,
+                "total_minutes": total_minutes,
+                "steps_count": steps_count,
+                "response": response,
+            },
+            response,
+        )
+    except Exception as exc:
+        return {"error": str(exc), "scheduled": False}
+
+
+# ---------------------------------------------------------------------------
+# Tool: schedule_strength_workout (inline, one-off strength)
+# ---------------------------------------------------------------------------
+
+@mcp.tool()
+async def schedule_strength_workout(
+    name: str,
+    exercises: list[dict],
+    happen_day: str,
+    sets: int = 1,
+    sort_no: int = 1,
+) -> dict:
+    """
+    Schedule a ONE-OFF strength workout for a specific date.
+
+    This is the COMMON case. Use this whenever the user wants a strength
+    workout on a specific date and doesn't explicitly ask for a reusable
+    template. Does NOT save to the Coros library — leaves no template
+    behind.
+
+    For a REUSABLE library template instead, use save_strength_workout_template
+    (which saves it for re-scheduling later via schedule_workout_template).
+
+    If the user's intent is unclear, ASK THEM:
+      "Do you want this saved as a reusable template in your library, or
+       just scheduled as a one-off for [date]?"
+    Don't guess.
+
+    Parameters
+    ----------
+    name : str
+        Workout name as it should appear on the calendar.
+    exercises : list[dict]
+        Same shape as save_strength_workout_template (origin_id, name, overview,
+        target_type, target_value, rest_seconds, optional weight_kg or
+        weight_lbs, optional per-exercise sets).
+    happen_day : str
+        Date in YYYYMMDD format.
+    sets : int
+        Number of full-circuit repetitions (default 1).
+    sort_no : int
+        Order within the day (default 1).
+
+    Returns
+    -------
+    dict with keys: scheduled, name, happen_day, sets, exercise_count,
+    response, and optionally 'warning' if enrichment lookup failed.
+
+    The 'response' dict contains the server-assigned identifiers needed to
+    later remove this calendar entry: plan_id, id_in_plan, plan_program_id,
+    entity_id, plus enrichment_ok. When enrichment_ok is True, pipe the
+    response into remove_scheduled_workout directly. When False, a top-level
+    'warning' key is set — the schedule POST succeeded but plan_id /
+    plan_program_id / entity_id are empty strings, so look them up via
+    list_planned_activities before calling remove_scheduled_workout.
+    """
+    auth = await _get_auth()
+    if auth is None:
+        return {"error": _NOT_AUTHENTICATED}
+    try:
+        response = await _run_with_auth(
+            coros_api.schedule_strength_workout,
+            auth,
+            name,
+            exercises,
+            happen_day,
+            sets,
+            sort_no,
+        )
+        return _attach_enrichment_warning(
+            {
+                "scheduled": True,
+                "name": name,
+                "happen_day": happen_day,
+                "sets": sets,
+                "exercise_count": len(exercises),
+                "response": response,
+            },
+            response,
+        )
     except Exception as exc:
         return {"error": str(exc), "scheduled": False}
 
@@ -693,17 +929,30 @@ async def remove_scheduled_workout(
 
 
 # ---------------------------------------------------------------------------
-# Tool: create_strength_workout
+# Tool: save_strength_workout_template
 # ---------------------------------------------------------------------------
 
 @mcp.tool()
-async def create_strength_workout(
+async def save_strength_workout_template(
     name: str,
     exercises: list[dict],
     sets: int = 1,
 ) -> dict:
     """
-    Create a new structured strength workout program.
+    Save a REUSABLE strength workout TEMPLATE to the Coros library.
+
+    ⚠️ This persists to the library indefinitely. Use ONLY when the user
+    explicitly asks to "save as a template", "create a workout in my
+    library", "add to my workout list".
+
+    For a ONE-OFF workout for a specific date — the common case — use
+    schedule_strength_workout instead. That tool builds the workout inline
+    and leaves no library residue.
+
+    If the user's intent is unclear, ASK THEM:
+      "Do you want this saved as a reusable template in your library, or
+       just scheduled as a one-off for [date]?"
+    Don't guess.
 
     Parameters
     ----------
@@ -748,7 +997,7 @@ async def create_strength_workout(
     if auth is None:
         return {"error": _NOT_AUTHENTICATED}
     try:
-        workout_id = await _run_with_auth(coros_api.create_strength_workout, auth, name, exercises, sets)
+        workout_id = await _run_with_auth(coros_api.save_strength_workout_template, auth, name, exercises, sets)
         return {
             "workout_id": workout_id,
             "name": name,

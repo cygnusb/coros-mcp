@@ -35,13 +35,15 @@ Ask your AI assistant questions like:
 | `get_sleep_data` | Fetch nightly sleep stages (deep, light, REM, awake) and sleep HR for n weeks (default: 4) |
 | `list_activities` | List activities for a date range with summary metrics |
 | `get_activity_detail` | Fetch full detail for a single activity (laps, HR zones, power zones) |
-| `list_workouts` | List all saved structured workout programs |
-| `create_workout` | Create a new structured workout with named steps and power targets |
-| `delete_workout` | Delete a workout program from the library |
+| `list_workout_templates` | List reusable workout templates saved in the library |
+| `save_workout_template` | Save a reusable cycling/intervals workout template (named steps, power targets) |
+| `save_strength_workout_template` | Save a reusable strength workout template (sets, reps, or timed exercises) |
+| `delete_workout_template` | Delete a saved workout template from the library |
 | `list_planned_activities` | List planned workouts from the Coros training calendar |
-| `schedule_workout` | Schedule an existing workout on a calendar day |
+| `schedule_workout` | Schedule a one-off cycling/intervals workout for a date (no library entry) |
+| `schedule_strength_workout` | Schedule a one-off strength workout for a date (no library entry) |
+| `schedule_workout_template` | Schedule an existing library template on a calendar day |
 | `remove_scheduled_workout` | Remove a scheduled workout from the calendar |
-| `create_strength_workout` | Create a structured strength workout with sets, reps, or timed exercises |
 | `list_exercises` | Browse the Coros exercise catalogue, especially for strength workouts |
 | `sync_coros_data` | Backfill all data into the local SQLite cache for a date range |
 | `get_cache_status` | Show coverage (record counts and date ranges) of the local cache |
@@ -255,9 +257,9 @@ Returns full activity data including laps, HR zones, power zones, and all sport-
 
 > **Note:** Large time-series arrays (`graphList`, `frequencyList`, `gpsLightDuration`) are stripped from the response to keep it manageable.
 
-### `list_workouts`
+### `list_workout_templates`
 
-List all saved structured workout programs.
+List reusable workout templates saved in the Coros library.
 
 ```json
 {}
@@ -265,11 +267,13 @@ List all saved structured workout programs.
 
 Returns: `workouts` (list), `count`
 
-Each workout includes: `id`, `name`, `sport_type`, `sport_name`, `estimated_time_seconds`, `exercise_count`, `exercises` (list of steps with `name`, `duration_seconds`, `intensity_low`, `intensity_high`, `sets`)
+Each entry includes: `id`, `name`, `sport_type`, `sport_name`, `estimated_time_seconds`, `exercise_count`, `exercises` (list of steps with `name`, `duration_seconds`, `intensity_low`, `intensity_high`, `sets`)
 
-### `create_workout`
+### `save_workout_template`
 
-Create a new structured workout. Workouts appear in the Coros app and can be synced to the watch. Steps can be plain steps or repeat groups for intervals.
+Save a reusable cycling/intervals workout **template** to the Coros library. The template appears in the Coros app and can be synced to the watch. Steps can be plain steps or repeat groups for intervals.
+
+> ⚠️ This persists to the library indefinitely. For a one-off workout for a specific date, use [`schedule_workout`](#schedule_workout) instead — it builds the workout inline and leaves no library entry.
 
 **Plain steps:**
 
@@ -308,57 +312,11 @@ Create a new structured workout. Workouts appear in the Coros app and can be syn
 
 Returns: `workout_id`, `name`, `total_minutes`, `steps_count`, `message`
 
-### `delete_workout`
+### `save_strength_workout_template`
 
-Delete a workout program from the Coros account.
+Save a reusable strength workout **template** to the Coros library. Exercises must come from the Coros exercise catalogue.
 
-```json
-{ "workout_id": "476023839273435149" }
-```
-
-The `workout_id` comes from `list_workouts`.
-
-Returns: `deleted`, `workout_id`, `message`
-
-### `list_planned_activities`
-
-List planned activities from the Coros training calendar.
-
-```json
-{ "start_day": "20260309", "end_day": "20260316" }
-```
-
-Returns: `schedule` (dict with `entities` and `programs` sub-lists), `count` (number of scheduled entities), `date_range`
-
-### `schedule_workout`
-
-Add an existing workout from your library to the Coros training calendar.
-
-```json
-{ "workout_id": "1234567890", "happen_day": "20260312", "sort_no": 1 }
-```
-
-Returns: `scheduled`, `workout_id`, `happen_day`
-
-### `remove_scheduled_workout`
-
-Remove a scheduled workout from the Coros training calendar.
-
-```json
-{
-  "plan_id": "987654321",
-  "id_in_plan": "1234567890",
-  "plan_program_id": "1234567890"
-}
-```
-
-`plan_id`, `id_in_plan`, and `plan_program_id` come from `list_planned_activities`. If `plan_program_id` is missing, you can usually reuse `id_in_plan`.
-
-Returns: `removed`, `plan_id`, `id_in_plan`
-
-### `create_strength_workout`
-
-Create a structured strength workout with repeated sets. Exercises must come from the Coros exercise catalogue.
+> ⚠️ This persists to the library indefinitely. For a one-off workout for a specific date, use [`schedule_strength_workout`](#schedule_strength_workout) instead — it builds the workout inline and leaves no library entry.
 
 ```json
 {
@@ -406,6 +364,92 @@ Create a structured strength workout with repeated sets. Exercises must come fro
 - kg and lbs can be mixed across exercises within the same workout.
 
 Returns: `workout_id`, `name`, `sets`, `exercise_count`
+
+### `delete_workout_template`
+
+Delete a saved workout template from the Coros library.
+
+```json
+{ "workout_id": "476023839273435149" }
+```
+
+The `workout_id` comes from `list_workout_templates`.
+
+Returns: `deleted`, `workout_id`, `message`
+
+### `list_planned_activities`
+
+List planned activities from the Coros training calendar.
+
+```json
+{ "start_day": "20260309", "end_day": "20260316" }
+```
+
+Returns: `schedule` (dict with `entities` and `programs` sub-lists), `count` (number of scheduled entities), `date_range`
+
+### `schedule_workout`
+
+Schedule a **one-off** cycling/intervals workout for a specific date. Builds the workout inline and posts straight to the calendar — does **not** create a library entry. This is the common case.
+
+Same parameters as [`save_workout_template`](#save_workout_template), plus `happen_day` (YYYYMMDD) and an optional `sort_no` (order within the day).
+
+```json
+{
+  "name": "Z2 Recovery",
+  "happen_day": "20260312",
+  "sport_type": 2,
+  "steps": [
+    {"name": "Easy spin", "duration_minutes": 60, "intensity_low": 150, "intensity_high": 200}
+  ]
+}
+```
+
+Returns: `scheduled`, `name`, `happen_day`, `total_minutes`, `steps_count`, `response`
+
+### `schedule_strength_workout`
+
+Schedule a **one-off** strength workout for a specific date. Builds the workout inline and posts straight to the calendar — does **not** create a library entry.
+
+Same parameters as [`save_strength_workout_template`](#save_strength_workout_template), plus `happen_day`.
+
+```json
+{
+  "name": "Push Day",
+  "happen_day": "20260312",
+  "sets": 1,
+  "exercises": [ ... ]
+}
+```
+
+Returns: `scheduled`, `name`, `happen_day`, `sets`, `exercise_count`, `response`
+
+### `schedule_workout_template`
+
+Schedule an existing library template on a calendar day.
+
+```json
+{ "workout_id": "1234567890", "happen_day": "20260312", "sort_no": 1 }
+```
+
+The `workout_id` comes from `list_workout_templates`. For one-off workouts that don't need a library entry, use [`schedule_workout`](#schedule_workout) or [`schedule_strength_workout`](#schedule_strength_workout) instead.
+
+Returns: `scheduled`, `workout_id`, `happen_day`, `response`
+
+### `remove_scheduled_workout`
+
+Remove a scheduled workout from the Coros training calendar.
+
+```json
+{
+  "plan_id": "987654321",
+  "id_in_plan": "1234567890",
+  "plan_program_id": "1234567890"
+}
+```
+
+`plan_id`, `id_in_plan`, and `plan_program_id` come from `list_planned_activities`. If `plan_program_id` is missing, you can usually reuse `id_in_plan`.
+
+Returns: `removed`, `plan_id`, `id_in_plan`
 
 ### `list_exercises`
 

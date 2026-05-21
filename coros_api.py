@@ -613,8 +613,8 @@ def _parse_workout(item: dict) -> dict:
     }
 
 
-async def fetch_workouts(auth: StoredAuth) -> list[dict]:
-    """List all user workout programs."""
+async def fetch_workout_templates(auth: StoredAuth) -> list[dict]:
+    """List all reusable workout templates in the user's library."""
     async with httpx.AsyncClient(timeout=30) as client:
         resp = await client.post(
             _base_url(auth.region) + ENDPOINTS["workout_list"],
@@ -629,31 +629,20 @@ async def fetch_workouts(auth: StoredAuth) -> list[dict]:
     return [_parse_workout(w) for w in body.get("data", [])]
 
 
-async def create_workout(
-    auth: StoredAuth,
+def _build_workout_program_payload(
     name: str,
     steps: list[dict],
     sport_type: int = 2,
     intensity_type: int = 6,
-) -> str:
+) -> dict:
+    """Sync builder for the cycling/intervals program dict.
+
+    steps: list of dicts — either plain steps or repeat groups (see
+    save_workout_template docstring).
     """
-    Create a new structured workout program.
-
-    steps: list of dicts — either plain steps or repeat groups.
-
-    Plain step:
-      - name: str — step label (e.g. "10:00 Einfahren")
-      - duration_minutes: float — step duration in minutes
-      - intensity_low: int — lower intensity target (watts, BPM, etc. per intensity_type)
-      - intensity_high: int — upper intensity target (0 = open-ended)
-
-    Repeat group:
-      - repeat: int — number of repetitions
-      - steps: list[dict] — sub-steps (same format as plain steps)
-
-    Returns the new workout ID.
-    """
-    exercises = []
+    if not steps:
+        raise ValueError("workout requires at least one step")
+    exercises: list[dict] = []
     top_index = 0  # counts top-level positions for sortNo
     total_seconds = 0
     ex_id = 0  # sequential exercise IDs (API uses these to link groups)
@@ -672,7 +661,6 @@ async def create_workout(
             )
             total_seconds += iteration_seconds * step["repeat"]
 
-            # Group header exercise
             exercises.append({
                 "id": group_id,
                 "name": "Group",
@@ -691,7 +679,6 @@ async def create_workout(
                 "originId": "0",
             })
 
-            # Sub-step exercises
             for j, sub in enumerate(sub_steps):
                 ex_id += 1
                 sub_duration = int(sub["duration_minutes"] * 60)
@@ -738,13 +725,40 @@ async def create_workout(
                 "originId": "0",
             })
 
-    payload = {
+    return {
         "name": name,
         "sportType": sport_type,
         "estimatedTime": total_seconds,
         "access": 1,
         "exercises": exercises,
     }
+
+
+async def save_workout_template(
+    auth: StoredAuth,
+    name: str,
+    steps: list[dict],
+    sport_type: int = 2,
+    intensity_type: int = 6,
+) -> str:
+    """
+    Save a reusable cycling/intervals workout template to the Coros library.
+
+    steps: list of dicts — either plain steps or repeat groups.
+
+    Plain step:
+      - name: str — step label (e.g. "10:00 Einfahren")
+      - duration_minutes: float — step duration in minutes
+      - intensity_low: int — lower intensity target (watts, BPM, etc. per intensity_type)
+      - intensity_high: int — upper intensity target (0 = open-ended)
+
+    Repeat group:
+      - repeat: int — number of repetitions
+      - steps: list[dict] — sub-steps (same format as plain steps)
+
+    Returns the new workout ID.
+    """
+    payload = _build_workout_program_payload(name, steps, sport_type, intensity_type)
 
     async with httpx.AsyncClient(timeout=30) as client:
         resp = await client.post(
@@ -760,8 +774,8 @@ async def create_workout(
     return str(body.get("data", ""))
 
 
-async def delete_workout(auth: StoredAuth, workout_id: str) -> None:
-    """Delete a workout program by ID."""
+async def delete_workout_template(auth: StoredAuth, workout_id: str) -> None:
+    """Delete a saved workout template by ID."""
     async with httpx.AsyncClient(timeout=30) as client:
         resp = await client.post(
             _base_url(auth.region) + ENDPOINTS["workout_delete"],
@@ -778,33 +792,43 @@ async def delete_workout(auth: StoredAuth, workout_id: str) -> None:
 # Planned activities (training schedule calendar)
 # ---------------------------------------------------------------------------
 
+async def _fetch_schedule_data(
+    client: httpx.AsyncClient,
+    auth: StoredAuth,
+    start_day: str,
+    end_day: str,
+) -> dict:
+    """Shared GET for /training/schedule/query. Returns the raw 'data' dict
+    (no stripping). Takes a caller-provided client so internal flows can
+    reuse a connection across multiple round-trips."""
+    params = {
+        "startDate": start_day,
+        "endDate": end_day,
+        "supportRestExercise": 1,
+    }
+    resp = await client.get(
+        _base_url(auth.region) + ENDPOINTS["schedule"],
+        params=params,
+        headers=_auth_headers(auth),
+    )
+    resp.raise_for_status()
+    body = resp.json()
+    _check_response(body, "schedule")
+    return body.get("data") or {}
+
+
 async def fetch_schedule(
     auth: StoredAuth, start_day: str, end_day: str
 ) -> dict:
     """
     Fetch planned activities from the Coros training calendar.
 
-    Uses GET /training/schedule/querysum with startDate/endDate params.
     start_day / end_day: YYYYMMDD strings.
-    Returns the raw list of scheduled items.
+    Returns the stripped schedule dict.
     """
-    params = {
-        "startDate": start_day,
-        "endDate": end_day,
-        "supportRestExercise": 1,
-    }
     async with httpx.AsyncClient(timeout=30) as client:
-        resp = await client.get(
-            _base_url(auth.region) + ENDPOINTS["schedule"],
-            params=params,
-            headers=_auth_headers(auth),
-        )
-        resp.raise_for_status()
-        body = resp.json()
-
-    _check_response(body, "schedule")
-
-    return _strip_schedule(body.get("data") or {})
+        data = await _fetch_schedule_data(client, auth, start_day, end_day)
+    return _strip_schedule(data)
 
 
 _EXERCISE_DROP = frozenset({
@@ -882,50 +906,86 @@ def _strip_schedule(data: dict) -> dict:
 _LB_TO_KG = 0.45359237
 
 
-async def create_strength_workout(
-    auth: StoredAuth,
+# Module-level cache for the strength-exercise catalog. The MCP server is
+# long-lived and the Coros catalog is effectively static within a session.
+# 1h TTL balances "session never refetches" with "long-running server
+# eventually picks up catalog additions if they ever happen".
+# Cache is process-global (not region/auth-scoped) — catalog IDs are global
+# across Coros regions, and the MCP server is single-user in practice.
+_STRENGTH_CATALOG_TTL_SECONDS = 3600
+_strength_catalog_cache: dict | None = None
+_strength_catalog_loaded_at: float = 0.0
+_strength_catalog_lock = asyncio.Lock()
+
+
+def _reset_strength_catalog_cache() -> None:
+    """Test-only helper: clear the module-level strength-catalog cache so
+    the next call to _load_strength_catalog refetches. Not part of the
+    public API — production code has no reason to invalidate the cache
+    (process restart is the supported way to pick up catalog changes)."""
+    global _strength_catalog_cache, _strength_catalog_loaded_at
+    _strength_catalog_cache = None
+    _strength_catalog_loaded_at = 0.0
+
+
+def _catalog_is_fresh(now: float) -> bool:
+    return (
+        _strength_catalog_cache is not None
+        and now - _strength_catalog_loaded_at < _STRENGTH_CATALOG_TTL_SECONDS
+    )
+
+
+async def _load_strength_catalog(auth: StoredAuth) -> dict:
+    """Fetch the strength-exercise catalog and index by id, memoized at
+    module scope with a TTL. Returns {} on transient network failure —
+    callers treat empty as a resilient miss (workout still creates, only
+    diagram metadata is lost).
+
+    Auth and API-level errors (ValueError from _check_response) propagate
+    so the user learns about a broken token instead of silently getting a
+    workout without metadata.
+    """
+    global _strength_catalog_cache, _strength_catalog_loaded_at
+    if _catalog_is_fresh(time.monotonic()):
+        return _strength_catalog_cache  # type: ignore[return-value]
+
+    async with _strength_catalog_lock:
+        # Re-check inside the lock — another coroutine may have populated
+        # the cache while we were waiting.
+        if _catalog_is_fresh(time.monotonic()):
+            return _strength_catalog_cache  # type: ignore[return-value]
+
+        try:
+            catalog = await fetch_exercises(auth, 4)
+        except httpx.HTTPError:
+            # Don't cache failures — leave cache unset so a later call retries.
+            return {}
+        _strength_catalog_cache = {str(e.get("id")): e for e in catalog}
+        _strength_catalog_loaded_at = time.monotonic()
+        return _strength_catalog_cache
+
+
+def _build_strength_program_payload(
     name: str,
     exercises: list[dict],
+    by_id: dict,
     sets: int = 1,
-) -> str:
-    """
-    Create a new structured strength workout program.
+) -> dict:
+    """Sync builder for the strength program dict — the JSON body that
+    /training/program/add accepts and that schedule/update accepts inline.
 
-    exercises: list of dicts with keys:
-      - origin_id: str  — exercise catalogue ID (from list_exercises)
-      - name: str       — T-code name (e.g. "T1061")
-      - overview: str   — sid_ key (e.g. "sid_strength_squats")
-      - target_type: int — 2=time (seconds), 3=reps
-      - target_value: int — seconds or reps
-      - rest_seconds: int — rest after this exercise. 0 → "Skip rests".
-      - weight_kg: float (optional) — prescribed weight in kg.
-      - weight_lbs: float (optional) — prescribed weight in pounds.
-        Mutually exclusive with weight_kg; pick one.
-        Omitting BOTH renders as "Bodyweight" in the app.
-        Explicit weight_kg=0 renders as "0.00 kg" — different from omitting.
-        For dumbbell exercises, by convention this is the per-hand weight.
-        The Coros app does not render ranges — single values only.
+    by_id is the catalog lookup ({id: catalog_entry}) used to populate per-
+    exercise muscle/part/equipment metadata. Pass {} to skip catalog enrichment.
 
-    sets: number of circuit repetitions.
-
-    Returns the new workout ID.
+    Validation (raises ValueError):
+      - empty exercises
+      - both weight_kg and weight_lbs set on the same exercise
+      - negative weight
     """
     if not exercises:
-        raise ValueError("create_strength_workout requires at least one exercise")
+        raise ValueError("strength workout requires at least one exercise")
 
     sets = max(1, sets)
-
-    # Fetch the strength catalog so we can copy per-exercise muscle / equipment /
-    # body-part metadata into each workout exercise. Without these, the Coros app
-    # cannot render the Training Machines / Training Parts sections, and the
-    # "Bodyweight" label on un-weighted exercises doesn't render either.
-    # If the catalog endpoint is down or rate-limited the workout still
-    # creates — only the diagram metadata is lost.
-    try:
-        catalog = await fetch_exercises(auth, 4)
-        by_id = {str(e.get("id")): e for e in catalog}
-    except Exception:
-        by_id = {}
 
     built = []
     total_duration = 0
@@ -1064,6 +1124,39 @@ async def create_strength_workout(
         "videoCoverUrl": "",
         "videoUrl": "",
     }
+    return payload
+
+
+async def save_strength_workout_template(
+    auth: StoredAuth,
+    name: str,
+    exercises: list[dict],
+    sets: int = 1,
+) -> str:
+    """
+    Save a reusable strength workout template to the Coros library.
+
+    exercises: list of dicts with keys:
+      - origin_id: str  — exercise catalogue ID (from list_exercises)
+      - name: str       — T-code name (e.g. "T1061")
+      - overview: str   — sid_ key (e.g. "sid_strength_squats")
+      - target_type: int — 2=time (seconds), 3=reps
+      - target_value: int — seconds or reps
+      - rest_seconds: int — rest after this exercise. 0 → "Skip rests".
+      - weight_kg: float (optional) — prescribed weight in kg.
+      - weight_lbs: float (optional) — prescribed weight in pounds.
+        Mutually exclusive with weight_kg; pick one.
+        Omitting BOTH renders as "Bodyweight" in the app.
+        Explicit weight_kg=0 renders as "0.00 kg" — different from omitting.
+        For dumbbell exercises, by convention this is the per-hand weight.
+        The Coros app does not render ranges — single values only.
+
+    sets: number of circuit repetitions.
+
+    Returns the new workout ID.
+    """
+    by_id = await _load_strength_catalog(auth)
+    payload = _build_strength_program_payload(name, exercises, by_id, sets)
 
     async with httpx.AsyncClient(timeout=30) as client:
         resp = await client.post(
@@ -1080,7 +1173,10 @@ async def create_strength_workout(
 
 
 async def _fetch_raw_workout(auth: StoredAuth, workout_id: str) -> dict | None:
-    """Return the raw workout object for a given ID from the workout list."""
+    """Return the raw workout object for a given ID from the workout list.
+    Returns None only when the list call succeeds but the ID is absent —
+    API-level errors raise via _check_response so callers don't confuse
+    'API broke' with 'not in library'."""
     async with httpx.AsyncClient(timeout=30) as client:
         resp = await client.post(
             _base_url(auth.region) + ENDPOINTS["workout_list"],
@@ -1089,64 +1185,55 @@ async def _fetch_raw_workout(auth: StoredAuth, workout_id: str) -> dict | None:
         )
         resp.raise_for_status()
         body = resp.json()
+    _check_response(body, "workout list")
     for w in body.get("data", []):
         if str(w.get("id", "")) == str(workout_id):
             return w
     return None
 
 
-async def schedule_workout(
+async def _post_schedule_inline(
     auth: StoredAuth,
-    workout_id: str,
+    program: dict,
     happen_day: str,
     sort_no: int = 1,
-) -> None:
+) -> dict:
+    """Resolve next idInPlan + POST /training/schedule/update with the program
+    embedded inline, then GET the schedule again to surface server-assigned
+    identifiers. Returns a 5-key dict: plan_id, id_in_plan, plan_program_id,
+    entity_id (all strings) and enrichment_ok (bool). On enrichment failure
+    the schedule POST has already succeeded — only id_in_plan is populated,
+    the other three string IDs are empty and enrichment_ok is False so the
+    caller can surface a warning instead of piping empty IDs straight into
+    remove_scheduled_workout.
+
+    NOTE: idInPlan is resolved as maxIdInPlan + 1 from the pre-POST schedule
+    GET. This is racy under concurrent calls for the same happen_day —
+    pre-existing behavior, acceptable for single-user MCP. Do not call this
+    in parallel for the same date.
     """
-    Add an existing workout to the Coros training calendar.
-
-    happen_day: YYYYMMDD string.
-    sort_no: order within the day (1 = first workout).
-    """
-    # Get raw workout object
-    program = await _fetch_raw_workout(auth, workout_id)
-    if program is None:
-        raise ValueError(f"Workout {workout_id} not found in library.")
-
-    # Fetch schedule to get maxIdInPlan (raw, not stripped)
-    params = {
-        "startDate": happen_day,
-        "endDate": happen_day,
-        "supportRestExercise": 1,
-    }
     async with httpx.AsyncClient(timeout=30) as client:
-        resp = await client.get(
-            _base_url(auth.region) + ENDPOINTS["schedule"],
-            params=params,
-            headers=_auth_headers(auth),
-        )
-        resp.raise_for_status()
-        schedule_body = resp.json()
+        pre_data = await _fetch_schedule_data(client, auth, happen_day, happen_day)
+        try:
+            id_in_plan = int(pre_data.get("maxIdInPlan", 0)) + 1
+        except (TypeError, ValueError):
+            id_in_plan = 1
 
-    raw_data = schedule_body.get("data") or {}
-    try:
-        id_in_plan = int(raw_data.get("maxIdInPlan", 0)) + 1
-    except (TypeError, ValueError):
-        id_in_plan = 1
+        program_with_id = {**program, "idInPlan": id_in_plan}
 
-    program["idInPlan"] = id_in_plan
+        # pbVersion=2 + versionObjects status=1 reverse-engineered from iOS;
+        # status=3 is the delete marker (see remove_scheduled_workout).
+        payload = {
+            "entities": [{
+                "happenDay": happen_day,
+                "idInPlan": id_in_plan,
+                "sortNoInSchedule": sort_no,
+            }],
+            "programs": [program_with_id],
+            "versionObjects": [{"id": id_in_plan, "status": 1}],
+            "pbVersion": 2,
+        }
 
-    payload = {
-        "entities": [{
-            "happenDay": happen_day,
-            "idInPlan": id_in_plan,
-            "sortNoInSchedule": sort_no,
-        }],
-        "programs": [program],
-        "versionObjects": [{"id": id_in_plan, "status": 1}],
-        "pbVersion": 2,
-    }
-
-    async with httpx.AsyncClient(timeout=30) as client:
         resp = await client.post(
             _base_url(auth.region) + ENDPOINTS["schedule_update"],
             json=payload,
@@ -1154,8 +1241,102 @@ async def schedule_workout(
         )
         resp.raise_for_status()
         body = resp.json()
+        _check_response(body, "schedule update")
 
-    _check_response(body, "schedule update")
+        # schedule/update's response omits the identifiers that
+        # remove_scheduled_workout requires; re-fetch and locate our entry
+        # by client-computed idInPlan (unique within a plan). Best-effort:
+        # POST already succeeded, lookup failure must not propagate as a
+        # schedule failure.
+        result = {
+            "plan_id": "",
+            "id_in_plan": str(id_in_plan),
+            "plan_program_id": "",
+            "entity_id": "",
+            "enrichment_ok": False,
+        }
+        try:
+            post_data = await _fetch_schedule_data(client, auth, happen_day, happen_day)
+            for entity in post_data.get("entities") or []:
+                if str(entity.get("idInPlan", "")) == str(id_in_plan):
+                    result["plan_id"] = str(post_data.get("id", ""))
+                    result["id_in_plan"] = str(entity.get("idInPlan", id_in_plan))
+                    result["plan_program_id"] = str(entity.get("planProgramId", ""))
+                    result["entity_id"] = str(entity.get("id", ""))
+                    result["enrichment_ok"] = bool(
+                        result["plan_id"]
+                        and result["plan_program_id"]
+                        and result["entity_id"]
+                    )
+                    break
+        except (httpx.HTTPError, ValueError):
+            pass
+
+    return result
+
+
+async def schedule_workout_template(
+    auth: StoredAuth,
+    workout_id: str,
+    happen_day: str,
+    sort_no: int = 1,
+) -> dict:
+    """
+    Add an existing library workout template to the Coros training calendar.
+
+    happen_day: YYYYMMDD string.
+    sort_no: order within the day (1 = first workout).
+
+    Returns the server response 'data' dict (shape depends on Coros API).
+    """
+    program = await _fetch_raw_workout(auth, workout_id)
+    if program is None:
+        raise ValueError(f"Workout {workout_id} not found in library.")
+    return await _post_schedule_inline(auth, program, happen_day, sort_no)
+
+
+async def schedule_workout(
+    auth: StoredAuth,
+    name: str,
+    steps: list[dict],
+    happen_day: str,
+    sport_type: int = 2,
+    intensity_type: int = 6,
+    sort_no: int = 1,
+) -> dict:
+    """
+    Build + schedule a one-off cycling/intervals workout for happen_day.
+    Does NOT persist a library entry — the program is embedded inline
+    in the schedule POST.
+
+    steps: same shape as save_workout_template (plain steps or repeat groups).
+
+    Returns the server response 'data' dict (shape depends on Coros API).
+    """
+    program = _build_workout_program_payload(name, steps, sport_type, intensity_type)
+    return await _post_schedule_inline(auth, program, happen_day, sort_no)
+
+
+async def schedule_strength_workout(
+    auth: StoredAuth,
+    name: str,
+    exercises: list[dict],
+    happen_day: str,
+    sets: int = 1,
+    sort_no: int = 1,
+) -> dict:
+    """
+    Build + schedule a one-off strength workout for happen_day. Does NOT
+    persist a library entry — the program is embedded inline in the
+    schedule POST.
+
+    exercises: same shape as save_strength_workout_template. Empty list raises.
+
+    Returns the server response 'data' dict (shape depends on Coros API).
+    """
+    by_id = await _load_strength_catalog(auth)
+    program = _build_strength_program_payload(name, exercises, by_id, sets)
+    return await _post_schedule_inline(auth, program, happen_day, sort_no)
 
 
 async def remove_scheduled_workout(
