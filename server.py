@@ -96,10 +96,16 @@ async def get_help() -> dict:
             {"name": "list_activities", "description": "List recorded activities (runs, rides, swims, etc.) with summaries"},  # noqa: E501
             {"name": "get_activity_detail", "description": "Get full detail for one activity by label_id"},
             {"name": "list_workouts", "description": "List planned structured workouts saved in the Coros Training Hub"},  # noqa: E501
+            {"name": "list_training_plans", "description": "List training plans saved in the Coros Training Hub"},  # noqa: E501
+            {"name": "list_training_plans_raw", "description": "List raw training plans including entities and programs"},  # noqa: E501
             {"name": "create_workout", "description": "Create a new structured workout with intervals and steps"},
             {"name": "delete_workout", "description": "Delete a workout by workout_id"},
             {"name": "list_planned_activities", "description": "List workouts scheduled on the training calendar"},
+            {"name": "list_planned_activities_raw", "description": "List raw scheduled workouts for calendar update workflows"},  # noqa: E501
+            {"name": "calculate_workout_program", "description": "Recalculate edited workout program metrics before updating"},  # noqa: E501
             {"name": "schedule_workout", "description": "Schedule a workout on a specific date"},
+            {"name": "add_planned_workout", "description": "Add an inline planned workout to the training calendar"},  # noqa: E501
+            {"name": "update_scheduled_workout", "description": "Update an existing scheduled workout on the calendar"},  # noqa: E501
             {"name": "remove_scheduled_workout", "description": "Remove a workout from the training calendar"},
             {"name": "create_strength_workout", "description": "Create a strength/gym workout with exercises and sets"},
             {"name": "list_exercises", "description": "List available strength exercises (used when building strength workouts)"},  # noqa: E501
@@ -474,6 +480,61 @@ async def list_workouts() -> dict:
 
 
 # ---------------------------------------------------------------------------
+# Tool: list_training_plans
+# ---------------------------------------------------------------------------
+
+@mcp.tool()
+async def list_training_plans(
+    status_list: list[int] | None = None,
+) -> dict:
+    """
+    List training plans in the Coros account.
+
+    Parameters
+    ----------
+    status_list : list[int] | None
+        Plan status values to query. Defaults to [1, 2], matching the Training
+        Hub request.
+
+    Returns
+    -------
+    dict with keys: plans (list), count
+    """
+    auth = await _get_auth()
+    if auth is None:
+        return {"error": _NOT_AUTHENTICATED, "plans": []}
+    try:
+        plans = await _run_with_auth(coros_api.fetch_training_plans, auth, status_list)
+        return {"plans": plans, "count": len(plans)}
+    except Exception as exc:
+        return {"error": str(exc), "plans": []}
+
+
+# ---------------------------------------------------------------------------
+# Tool: list_training_plans_raw
+# ---------------------------------------------------------------------------
+
+@mcp.tool()
+async def list_training_plans_raw(
+    status_list: list[int] | None = None,
+) -> dict:
+    """
+    List training plans without stripping API fields.
+
+    Use this when the full plan payload is needed, including entities and
+    programs.
+    """
+    auth = await _get_auth()
+    if auth is None:
+        return {"error": _NOT_AUTHENTICATED, "plans": []}
+    try:
+        plans = await _run_with_auth(coros_api.fetch_training_plans_raw, auth, status_list)
+        return {"plans": plans, "count": len(plans)}
+    except Exception as exc:
+        return {"error": str(exc), "plans": []}
+
+
+# ---------------------------------------------------------------------------
 # Tool: create_workout
 # ---------------------------------------------------------------------------
 
@@ -619,6 +680,60 @@ async def list_planned_activities(
 
 
 # ---------------------------------------------------------------------------
+# Tool: list_planned_activities_raw
+# ---------------------------------------------------------------------------
+
+@mcp.tool()
+async def list_planned_activities_raw(
+    start_day: str,
+    end_day: str,
+) -> dict:
+    """
+    List planned activities without stripping API fields.
+
+    Use this before updating an existing scheduled workout. The raw entity and
+    program objects contain identifiers and version fields required by
+    update_scheduled_workout.
+    """
+    auth = await _get_auth()
+    if auth is None:
+        return {"error": _NOT_AUTHENTICATED, "schedule": {}}
+    try:
+        items = await _run_with_auth(coros_api.fetch_schedule_raw, auth, start_day, end_day)
+        return {
+            "schedule": items,
+            "count": len(items.get("entities", [])),
+            "date_range": f"{start_day} – {end_day}",
+        }
+    except Exception as exc:
+        return {"error": str(exc), "schedule": {}}
+
+
+# ---------------------------------------------------------------------------
+# Tool: calculate_workout_program
+# ---------------------------------------------------------------------------
+
+@mcp.tool()
+async def calculate_workout_program(program: dict) -> dict:
+    """
+    Recalculate a workout program after editing its exercises.
+
+    This calls Coros /training/program/calculate and returns the calculated
+    metrics plus a copy of the supplied program with derived fields such as
+    duration, estimated distance, training load, and exerciseBarChart applied.
+    """
+    auth = await _get_auth()
+    if auth is None:
+        return {"error": _NOT_AUTHENTICATED}
+    try:
+        calculation = await _run_with_auth(coros_api.calculate_workout_program, auth, program)
+        updated_program = coros_api.apply_workout_calculation(program, calculation)
+        return {"calculation": calculation, "program": updated_program}
+    except Exception as exc:
+        return {"error": str(exc)}
+
+
+# ---------------------------------------------------------------------------
 # Tool: schedule_workout
 # ---------------------------------------------------------------------------
 
@@ -652,6 +767,82 @@ async def schedule_workout(
         return {"scheduled": True, "workout_id": workout_id, "happen_day": happen_day}
     except Exception as exc:
         return {"error": str(exc), "scheduled": False}
+
+
+# ---------------------------------------------------------------------------
+# Tool: add_planned_workout
+# ---------------------------------------------------------------------------
+
+@mcp.tool()
+async def add_planned_workout(
+    entity: dict,
+    program: dict,
+    version_object: dict | None = None,
+) -> dict:
+    """
+    Add an inline planned workout to the Coros training calendar.
+
+    Parameters
+    ----------
+    entity : dict
+        Raw schedule entity object. Must include idInPlan and happenDay.
+    program : dict
+        Raw program object to add to the calendar.
+    version_object : dict | None
+        Optional explicit version object. If omitted, it is built with
+        status=1 (add).
+    """
+    auth = await _get_auth()
+    if auth is None:
+        return {"error": _NOT_AUTHENTICATED, "added": False}
+    try:
+        await _run_with_auth(coros_api.add_planned_workout, auth, entity, program, version_object)
+        return {
+            "added": True,
+            "happen_day": entity.get("happenDay"),
+            "id_in_plan": entity.get("idInPlan") or program.get("idInPlan"),
+        }
+    except Exception as exc:
+        return {"error": str(exc), "added": False}
+
+
+# ---------------------------------------------------------------------------
+# Tool: update_scheduled_workout
+# ---------------------------------------------------------------------------
+
+@mcp.tool()
+async def update_scheduled_workout(
+    entity: dict,
+    program: dict,
+    version_object: dict | None = None,
+) -> dict:
+    """
+    Update an existing scheduled workout on the Coros training calendar.
+
+    Parameters
+    ----------
+    entity : dict
+        Raw entity object from list_planned_activities_raw, with any intended
+        edits applied.
+    program : dict
+        Raw or calculated program object. If exercises changed, first call
+        calculate_workout_program and pass its returned program here.
+    version_object : dict | None
+        Optional explicit version object. If omitted, it is built from entity /
+        program with status=2 (update).
+    """
+    auth = await _get_auth()
+    if auth is None:
+        return {"error": _NOT_AUTHENTICATED, "updated": False}
+    try:
+        await _run_with_auth(coros_api.update_scheduled_workout, auth, entity, program, version_object)
+        return {
+            "updated": True,
+            "plan_id": entity.get("planId") or program.get("planId"),
+            "id_in_plan": entity.get("idInPlan") or program.get("idInPlan"),
+        }
+    except Exception as exc:
+        return {"error": str(exc), "updated": False}
 
 
 # ---------------------------------------------------------------------------
