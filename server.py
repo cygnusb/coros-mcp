@@ -906,10 +906,27 @@ async def create_strength_workout(
         - overview (str): sid_ key (e.g. "sid_strength_squats")
         - target_type (int): 2=time in seconds, 3=reps
         - target_value (int): number of seconds or reps
-        - rest_seconds (int): rest after this exercise (default 60)
+        - rest_seconds (int): rest after this exercise (default 60).
+          Use 0 to render as "Skip rests" in the Coros app.
         - sets (int, optional): number of consecutive sets of this exercise
           (default 1). Use this to get "3 sets of face pull in a row" instead
           of having to duplicate the exercise entry 3 times.
+        - weight_kg (float, optional): prescribed weight in kg.
+        - weight_lbs (float, optional): prescribed weight in pounds.
+          Mutually exclusive with weight_kg — set at most one.
+          The Coros app supports mixing kg/lbs per exercise within the same
+          workout; this lbs exercise will display as lbs regardless of other
+          exercises' units.
+          Omitting BOTH fields renders as "Bodyweight" in the app
+          (intensityValue is sent as an empty string, intensityCustom=1).
+          Explicitly setting weight_kg=0 renders as "0.00 kg" — distinct
+          from "Bodyweight". For dumbbell exercises this is the per-hand
+          weight by convention. The Coros app shows a single weight per
+          exercise — it does not render ranges.
+
+    Muscle / equipment metadata (Training Machines + Training Parts diagrams
+    in the app) is auto-populated from the exercise catalog by origin_id —
+    no caller action required.
     sets : int
         Number of full-circuit repetitions over the whole exercise list
         (default 1). Distinct from the per-exercise `sets` above.

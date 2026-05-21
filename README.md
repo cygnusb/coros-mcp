@@ -1,5 +1,10 @@
 # coros-mcp
 
+[![CI](https://github.com/cygnusb/coros-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/cygnusb/coros-mcp/actions/workflows/ci.yml)
+[![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue)](https://www.python.org/)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
+[![Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff)
+
 A [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) server that fetches sleep, HRV, and training data from the unofficial Coros API and exposes them to AI assistants like Claude.
 
 **No API key required.** This server authenticates directly with your Coros Training Hub credentials. Your token is stored securely in your system keyring (or an encrypted local file as fallback), never transmitted anywhere except to Coros.
@@ -367,7 +372,8 @@ Create a structured strength workout with repeated sets. Exercises must come fro
       "target_type": 3,
       "target_value": 12,
       "rest_seconds": 45,
-      "sets": 3
+      "sets": 3,
+      "weight_kg": 80
     },
     {
       "origin_id": "130",
@@ -386,6 +392,18 @@ Create a structured strength workout with repeated sets. Exercises must come fro
 `sets` (per exercise, optional): consecutive sets of that exercise before moving on. Use this instead of duplicating the exercise entry. Defaults to 1.
 
 `sets` (top-level): full-circuit repetitions — repeats the entire exercise list. Defaults to 1.
+
+**Weight fields (per exercise, optional):**
+
+| Field | Description |
+|-------|-------------|
+| `weight_kg` | Prescribed weight in kg (e.g. `80`) |
+| `weight_lbs` | Prescribed weight in pounds (e.g. `176.4`) — mutually exclusive with `weight_kg` |
+
+- Omitting **both** fields renders the exercise as **Bodyweight** in the Coros app.
+- Setting `weight_kg: 0` renders as **"0.00 kg"** — distinct from Bodyweight.
+- For dumbbell exercises, the weight is per hand by convention (the app shows a single value).
+- kg and lbs can be mixed across exercises within the same workout.
 
 Returns: `workout_id`, `name`, `sets`, `exercise_count`
 
