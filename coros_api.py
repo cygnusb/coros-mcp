@@ -613,8 +613,8 @@ def _parse_workout(item: dict) -> dict:
     }
 
 
-async def fetch_workouts(auth: StoredAuth) -> list[dict]:
-    """List all user workout programs."""
+async def fetch_workout_templates(auth: StoredAuth) -> list[dict]:
+    """List all reusable workout templates in the user's library."""
     async with httpx.AsyncClient(timeout=30) as client:
         resp = await client.post(
             _base_url(auth.region) + ENDPOINTS["workout_list"],
@@ -790,33 +790,43 @@ async def delete_workout_template(auth: StoredAuth, workout_id: str) -> None:
 # Planned activities (training schedule calendar)
 # ---------------------------------------------------------------------------
 
+async def _fetch_schedule_data(
+    client: httpx.AsyncClient,
+    auth: StoredAuth,
+    start_day: str,
+    end_day: str,
+) -> dict:
+    """Shared GET for /training/schedule/query. Returns the raw 'data' dict
+    (no stripping). Takes a caller-provided client so internal flows can
+    reuse a connection across multiple round-trips."""
+    params = {
+        "startDate": start_day,
+        "endDate": end_day,
+        "supportRestExercise": 1,
+    }
+    resp = await client.get(
+        _base_url(auth.region) + ENDPOINTS["schedule"],
+        params=params,
+        headers=_auth_headers(auth),
+    )
+    resp.raise_for_status()
+    body = resp.json()
+    _check_response(body, "schedule")
+    return body.get("data") or {}
+
+
 async def fetch_schedule(
     auth: StoredAuth, start_day: str, end_day: str
 ) -> dict:
     """
     Fetch planned activities from the Coros training calendar.
 
-    Uses GET /training/schedule/querysum with startDate/endDate params.
     start_day / end_day: YYYYMMDD strings.
-    Returns the raw list of scheduled items.
+    Returns the stripped schedule dict.
     """
-    params = {
-        "startDate": start_day,
-        "endDate": end_day,
-        "supportRestExercise": 1,
-    }
     async with httpx.AsyncClient(timeout=30) as client:
-        resp = await client.get(
-            _base_url(auth.region) + ENDPOINTS["schedule"],
-            params=params,
-            headers=_auth_headers(auth),
-        )
-        resp.raise_for_status()
-        body = resp.json()
-
-    _check_response(body, "schedule")
-
-    return _strip_schedule(body.get("data") or {})
+        data = await _fetch_schedule_data(client, auth, start_day, end_day)
+    return _strip_schedule(data)
 
 
 _EXERCISE_DROP = frozenset({
@@ -894,19 +904,60 @@ def _strip_schedule(data: dict) -> dict:
 _LB_TO_KG = 0.45359237
 
 
+# Module-level cache for the strength-exercise catalog. The MCP server is
+# long-lived and the Coros catalog is effectively static within a session.
+# 1h TTL balances "session never refetches" with "long-running server
+# eventually picks up catalog additions if they ever happen".
+# Cache is process-global (not region/auth-scoped) — catalog IDs are global
+# across Coros regions, and the MCP server is single-user in practice.
+_STRENGTH_CATALOG_TTL_SECONDS = 3600
+_strength_catalog_cache: dict | None = None
+_strength_catalog_loaded_at: float = 0.0
+_strength_catalog_lock = asyncio.Lock()
+
+
+def _reset_strength_catalog_cache() -> None:
+    """Test-only: clear the module-level catalog cache."""
+    global _strength_catalog_cache, _strength_catalog_loaded_at
+    _strength_catalog_cache = None
+    _strength_catalog_loaded_at = 0.0
+
+
+def _catalog_is_fresh(now: float) -> bool:
+    return (
+        _strength_catalog_cache is not None
+        and now - _strength_catalog_loaded_at < _STRENGTH_CATALOG_TTL_SECONDS
+    )
+
+
 async def _load_strength_catalog(auth: StoredAuth) -> dict:
-    """Fetch the strength-exercise catalog and index by id. Returns {} on
-    transient network failure — callers treat empty as a resilient miss
-    (workout still creates, only diagram metadata is lost).
+    """Fetch the strength-exercise catalog and index by id, memoized at
+    module scope with a TTL. Returns {} on transient network failure —
+    callers treat empty as a resilient miss (workout still creates, only
+    diagram metadata is lost).
 
     Auth and API-level errors (ValueError from _check_response) propagate
     so the user learns about a broken token instead of silently getting a
-    workout without metadata."""
-    try:
-        catalog = await fetch_exercises(auth, 4)
-        return {str(e.get("id")): e for e in catalog}
-    except httpx.HTTPError:
-        return {}
+    workout without metadata.
+    """
+    global _strength_catalog_cache, _strength_catalog_loaded_at
+    if _catalog_is_fresh(time.monotonic()):
+        return _strength_catalog_cache  # type: ignore[return-value]
+
+    async with _strength_catalog_lock:
+        # Re-check inside the lock — another coroutine may have populated
+        # the cache while we were waiting.
+        if _catalog_is_fresh(time.monotonic()):
+            return _strength_catalog_cache  # type: ignore[return-value]
+
+        try:
+            catalog = await fetch_exercises(auth, 4)
+        except httpx.HTTPError:
+            # Don't cache failures — leave cache unset so a later call retries.
+            return {}
+        _strength_catalog_cache = {str(e.get("id")): e for e in catalog}
+        _strength_catalog_loaded_at = time.monotonic()
+        return _strength_catalog_cache
 
 
 def _build_strength_program_payload(
@@ -1143,37 +1194,25 @@ async def _post_schedule_inline(
     sort_no: int = 1,
 ) -> dict:
     """Resolve next idInPlan + POST /training/schedule/update with the program
-    embedded inline. Returns the response 'data' dict so callers can surface
-    server-assigned identifiers (plan_id, id_in_plan, plan_program_id).
+    embedded inline, then GET the schedule again to surface server-assigned
+    identifiers. Returns a 4-key dict: plan_id, id_in_plan, plan_program_id,
+    entity_id (all strings). On enrichment failure the schedule POST has
+    already succeeded — only id_in_plan is populated, the other three are
+    empty strings.
 
     maxIdInPlan + 1 is racy under concurrent calls — pre-existing behavior.
     """
-    params = {
-        "startDate": happen_day,
-        "endDate": happen_day,
-        "supportRestExercise": 1,
-    }
     async with httpx.AsyncClient(timeout=30) as client:
-        resp = await client.get(
-            _base_url(auth.region) + ENDPOINTS["schedule"],
-            params=params,
-            headers=_auth_headers(auth),
-        )
-        resp.raise_for_status()
-        schedule_body = resp.json()
-
-        raw_data = schedule_body.get("data") or {}
+        pre_data = await _fetch_schedule_data(client, auth, happen_day, happen_day)
         try:
-            id_in_plan = int(raw_data.get("maxIdInPlan", 0)) + 1
+            id_in_plan = int(pre_data.get("maxIdInPlan", 0)) + 1
         except (TypeError, ValueError):
             id_in_plan = 1
 
         program_with_id = {**program, "idInPlan": id_in_plan}
 
-        # versionObjects + pbVersion are reverse-engineered from iOS app
-        # payloads. pbVersion=2 is the schema version Coros expects; status=1
-        # signals "active" (status=3 is the delete marker — see
-        # remove_scheduled_workout).
+        # pbVersion=2 + versionObjects status=1 reverse-engineered from iOS;
+        # status=3 is the delete marker (see remove_scheduled_workout).
         payload = {
             "entities": [{
                 "happenDay": happen_day,
@@ -1192,11 +1231,32 @@ async def _post_schedule_inline(
         )
         resp.raise_for_status()
         body = resp.json()
+        _check_response(body, "schedule update")
 
-    _check_response(body, "schedule update")
+        # schedule/update's response omits the identifiers that
+        # remove_scheduled_workout requires; re-fetch and locate our entry
+        # by client-computed idInPlan (unique within a plan). Best-effort:
+        # POST already succeeded, lookup failure must not propagate as a
+        # schedule failure.
+        result = {
+            "plan_id": "",
+            "id_in_plan": str(id_in_plan),
+            "plan_program_id": "",
+            "entity_id": "",
+        }
+        try:
+            post_data = await _fetch_schedule_data(client, auth, happen_day, happen_day)
+            for entity in post_data.get("entities") or []:
+                if str(entity.get("idInPlan", "")) == str(id_in_plan):
+                    result["plan_id"] = str(post_data.get("id", ""))
+                    result["id_in_plan"] = str(entity.get("idInPlan", id_in_plan))
+                    result["plan_program_id"] = str(entity.get("planProgramId", ""))
+                    result["entity_id"] = str(entity.get("id", ""))
+                    break
+        except (httpx.HTTPError, ValueError):
+            pass
 
-    response_data = body.get("data")
-    return response_data if isinstance(response_data, dict) else {"id_in_plan": id_in_plan}
+    return result
 
 
 async def schedule_workout_template(

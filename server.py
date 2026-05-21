@@ -474,7 +474,7 @@ async def list_workout_templates() -> dict:
     if auth is None:
         return {"error": _NOT_AUTHENTICATED, "workouts": []}
     try:
-        workouts = await _run_with_auth(coros_api.fetch_workouts, auth)
+        workouts = await _run_with_auth(coros_api.fetch_workout_templates, auth)
         return {"workouts": workouts, "count": len(workouts)}
     except Exception as exc:
         return {"error": str(exc), "workouts": []}
@@ -672,6 +672,10 @@ async def schedule_workout_template(
     Returns
     -------
     dict with keys: scheduled, workout_id, happen_day, response
+
+    The 'response' dict contains the server-assigned identifiers needed to
+    later remove this calendar entry: plan_id, id_in_plan, plan_program_id,
+    entity_id — pipe these into remove_scheduled_workout directly.
     """
     auth = await _get_auth()
     if auth is None:
@@ -736,6 +740,10 @@ async def schedule_workout(
     Returns
     -------
     dict with keys: scheduled, name, happen_day, total_minutes, steps_count, response
+
+    The 'response' dict contains the server-assigned identifiers needed to
+    later remove this calendar entry: plan_id, id_in_plan, plan_program_id,
+    entity_id — pipe these into remove_scheduled_workout directly.
     """
     auth = await _get_auth()
     if auth is None:
@@ -810,6 +818,10 @@ async def schedule_strength_workout(
     Returns
     -------
     dict with keys: scheduled, name, happen_day, sets, exercise_count, response
+
+    The 'response' dict contains the server-assigned identifiers needed to
+    later remove this calendar entry: plan_id, id_in_plan, plan_program_id,
+    entity_id — pipe these into remove_scheduled_workout directly.
     """
     auth = await _get_auth()
     if auth is None:

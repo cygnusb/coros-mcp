@@ -5,11 +5,18 @@ These pin the reverse-engineered encoding rules in
 Pure JSON-shape assertions — no HTTP, no auth, no mocks.
 """
 
+import asyncio
+from unittest.mock import AsyncMock
+
+import httpx
 import pytest
 
+import coros_api
 from coros_api import (
     _build_strength_program_payload,
     _build_workout_program_payload,
+    _load_strength_catalog,
+    _reset_strength_catalog_cache,
 )
 
 
@@ -314,3 +321,111 @@ def test_cycling_sport_and_intensity_types_propagate():
         assert ex["sportType"] == 200
     # Non-group steps use the caller-provided intensity_type
     assert payload["exercises"][0]["intensityType"] == 2
+
+
+# ---------------------------------------------------------------------------
+# Strength catalog cache (_load_strength_catalog)
+# ---------------------------------------------------------------------------
+
+_SAMPLE_CATALOG = [
+    {"id": "T1010", "muscle": ["abs"], "part": ["core"], "equipment": [1]},
+    {"id": "T1052", "muscle": ["lats"], "part": ["back"], "equipment": [5]},
+    {"id": "T1120", "muscle": [], "part": [], "equipment": []},
+]
+
+
+@pytest.fixture
+def clean_catalog_cache():
+    """Reset the module-level cache before and after each test."""
+    _reset_strength_catalog_cache()
+    yield
+    _reset_strength_catalog_cache()
+
+
+async def test_catalog_cache_first_call_fetches(clean_catalog_cache, monkeypatch):
+    mock = AsyncMock(return_value=_SAMPLE_CATALOG)
+    monkeypatch.setattr(coros_api, "fetch_exercises", mock)
+
+    result = await _load_strength_catalog(auth=None)  # auth ignored by the mock
+
+    assert mock.await_count == 1
+    assert set(result.keys()) == {"T1010", "T1052", "T1120"}
+    assert result["T1052"]["muscle"] == ["lats"]
+
+
+async def test_catalog_cache_second_call_within_ttl_uses_cache(clean_catalog_cache, monkeypatch):
+    mock = AsyncMock(return_value=_SAMPLE_CATALOG)
+    monkeypatch.setattr(coros_api, "fetch_exercises", mock)
+
+    await _load_strength_catalog(auth=None)
+    await _load_strength_catalog(auth=None)
+
+    assert mock.await_count == 1
+
+
+async def test_catalog_cache_refetches_after_ttl(clean_catalog_cache, monkeypatch):
+    mock = AsyncMock(return_value=_SAMPLE_CATALOG)
+    monkeypatch.setattr(coros_api, "fetch_exercises", mock)
+
+    # First call populates cache at t=0
+    fake_now = [0.0]
+    monkeypatch.setattr(coros_api.time, "monotonic", lambda: fake_now[0])
+    await _load_strength_catalog(auth=None)
+    assert mock.await_count == 1
+
+    # Jump past TTL (1h) — next call must refetch
+    fake_now[0] = coros_api._STRENGTH_CATALOG_TTL_SECONDS + 1
+    await _load_strength_catalog(auth=None)
+    assert mock.await_count == 2
+
+
+async def test_catalog_cache_httperror_returns_empty_does_not_poison(clean_catalog_cache, monkeypatch):
+    mock = AsyncMock(side_effect=httpx.ConnectError("boom"))
+    monkeypatch.setattr(coros_api, "fetch_exercises", mock)
+
+    result = await _load_strength_catalog(auth=None)
+    assert result == {}
+    assert coros_api._strength_catalog_cache is None
+
+    # Next call retries because cache is still unset.
+    mock.side_effect = None
+    mock.return_value = _SAMPLE_CATALOG
+    result = await _load_strength_catalog(auth=None)
+    assert set(result.keys()) == {"T1010", "T1052", "T1120"}
+    assert mock.await_count == 2
+
+
+async def test_catalog_cache_concurrent_calls_coalesce(clean_catalog_cache, monkeypatch):
+    """Five gathered calls should trigger exactly one fetch_exercises invocation.
+
+    Uses an asyncio.Event to deterministically force all five tasks to
+    queue on the cache lock before the fetch returns — without this gate
+    the first task could finish before others enter, hiding regressions
+    in the in-lock re-check branch.
+    """
+    call_count = 0
+    release_fetch = asyncio.Event()
+
+    async def gated_fetch(_auth, _sport_type):
+        nonlocal call_count
+        call_count += 1
+        await release_fetch.wait()
+        return _SAMPLE_CATALOG
+
+    monkeypatch.setattr(coros_api, "fetch_exercises", gated_fetch)
+
+    # Start five concurrent calls; they all enter _load_strength_catalog
+    # and contend for the lock. The first acquires it and stalls inside
+    # gated_fetch waiting on release_fetch.
+    tasks = [asyncio.create_task(_load_strength_catalog(auth=None)) for _ in range(5)]
+    # Yield enough to let all five tasks reach the lock-wait state.
+    for _ in range(10):
+        await asyncio.sleep(0)
+    # Now release the fetch; cache populates, queued tasks re-check inside
+    # the lock and return the cached value without re-fetching.
+    release_fetch.set()
+    results = await asyncio.gather(*tasks)
+
+    assert call_count == 1
+    for r in results:
+        assert set(r.keys()) == {"T1010", "T1052", "T1120"}

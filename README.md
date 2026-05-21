@@ -312,6 +312,59 @@ Save a reusable cycling/intervals workout **template** to the Coros library. The
 
 Returns: `workout_id`, `name`, `total_minutes`, `steps_count`, `message`
 
+### `save_strength_workout_template`
+
+Save a reusable strength workout **template** to the Coros library. Exercises must come from the Coros exercise catalogue.
+
+> ⚠️ This persists to the library indefinitely. For a one-off workout for a specific date, use [`schedule_strength_workout`](#schedule_strength_workout) instead — it builds the workout inline and leaves no library entry.
+
+```json
+{
+  "name": "Leg Circuit",
+  "sets": 3,
+  "exercises": [
+    {
+      "origin_id": "54",
+      "name": "T1061",
+      "overview": "sid_strength_squats",
+      "target_type": 3,
+      "target_value": 12,
+      "rest_seconds": 45,
+      "sets": 3,
+      "weight_kg": 80
+    },
+    {
+      "origin_id": "130",
+      "name": "T1176",
+      "overview": "sid_strength_plank",
+      "target_type": 2,
+      "target_value": 60,
+      "rest_seconds": 30
+    }
+  ]
+}
+```
+
+`target_type`: `2` = time in seconds, `3` = reps
+
+`sets` (per exercise, optional): consecutive sets of that exercise before moving on. Use this instead of duplicating the exercise entry. Defaults to 1.
+
+`sets` (top-level): full-circuit repetitions — repeats the entire exercise list. Defaults to 1.
+
+**Weight fields (per exercise, optional):**
+
+| Field | Description |
+|-------|-------------|
+| `weight_kg` | Prescribed weight in kg (e.g. `80`) |
+| `weight_lbs` | Prescribed weight in pounds (e.g. `176.4`) — mutually exclusive with `weight_kg` |
+
+- Omitting **both** fields renders the exercise as **Bodyweight** in the Coros app.
+- Setting `weight_kg: 0` renders as **"0.00 kg"** — distinct from Bodyweight.
+- For dumbbell exercises, the weight is per hand by convention (the app shows a single value).
+- kg and lbs can be mixed across exercises within the same workout.
+
+Returns: `workout_id`, `name`, `sets`, `exercise_count`
+
 ### `delete_workout_template`
 
 Delete a saved workout template from the Coros library.
@@ -397,59 +450,6 @@ Remove a scheduled workout from the Coros training calendar.
 `plan_id`, `id_in_plan`, and `plan_program_id` come from `list_planned_activities`. If `plan_program_id` is missing, you can usually reuse `id_in_plan`.
 
 Returns: `removed`, `plan_id`, `id_in_plan`
-
-### `save_strength_workout_template`
-
-Save a reusable strength workout **template** to the Coros library. Exercises must come from the Coros exercise catalogue.
-
-> ⚠️ This persists to the library indefinitely. For a one-off workout for a specific date, use [`schedule_strength_workout`](#schedule_strength_workout) instead — it builds the workout inline and leaves no library entry.
-
-```json
-{
-  "name": "Leg Circuit",
-  "sets": 3,
-  "exercises": [
-    {
-      "origin_id": "54",
-      "name": "T1061",
-      "overview": "sid_strength_squats",
-      "target_type": 3,
-      "target_value": 12,
-      "rest_seconds": 45,
-      "sets": 3,
-      "weight_kg": 80
-    },
-    {
-      "origin_id": "130",
-      "name": "T1176",
-      "overview": "sid_strength_plank",
-      "target_type": 2,
-      "target_value": 60,
-      "rest_seconds": 30
-    }
-  ]
-}
-```
-
-`target_type`: `2` = time in seconds, `3` = reps
-
-`sets` (per exercise, optional): consecutive sets of that exercise before moving on. Use this instead of duplicating the exercise entry. Defaults to 1.
-
-`sets` (top-level): full-circuit repetitions — repeats the entire exercise list. Defaults to 1.
-
-**Weight fields (per exercise, optional):**
-
-| Field | Description |
-|-------|-------------|
-| `weight_kg` | Prescribed weight in kg (e.g. `80`) |
-| `weight_lbs` | Prescribed weight in pounds (e.g. `176.4`) — mutually exclusive with `weight_kg` |
-
-- Omitting **both** fields renders the exercise as **Bodyweight** in the Coros app.
-- Setting `weight_kg: 0` renders as **"0.00 kg"** — distinct from Bodyweight.
-- For dumbbell exercises, the weight is per hand by convention (the app shows a single value).
-- kg and lbs can be mixed across exercises within the same workout.
-
-Returns: `workout_id`, `name`, `sets`, `exercise_count`
 
 ### `list_exercises`
 
