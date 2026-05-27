@@ -983,8 +983,8 @@ async def save_strength_workout_template(
           exercise — it does not render ranges.
 
     Muscle / equipment metadata (Training Machines + Training Parts diagrams
-    in the app) is auto-populated from the exercise catalog by origin_id —
-    no caller action required.
+    in the app) and video guidance (animationId) are auto-populated from the
+    exercise catalog by origin_id — no caller action required.
     sets : int
         Number of full-circuit repetitions over the whole exercise list
         (default 1). Distinct from the per-exercise `sets` above.

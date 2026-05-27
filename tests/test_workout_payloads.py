@@ -209,6 +209,7 @@ def test_catalog_metadata_propagates_when_present():
             "muscleRelevance": [1.0, 0.8],
             "part": ["legs"],
             "equipment": [3],
+            "animationId": 42,
         }
     }
     payload = _build([_exercise(origin_id="T1061")], by_id=by_id)
@@ -217,6 +218,7 @@ def test_catalog_metadata_propagates_when_present():
     assert ex["muscleRelevance"] == [1.0, 0.8]
     assert ex["part"] == ["legs"]
     assert ex["equipment"] == [3]
+    assert ex["animationId"] == 42
 
 
 def test_catalog_miss_gives_empty_lists():
@@ -228,6 +230,7 @@ def test_catalog_miss_gives_empty_lists():
     assert ex["muscleRelevance"] == []
     assert ex["part"] == []
     assert ex["equipment"] == []
+    assert ex["animationId"] == 0
 
 
 # ---------------------------------------------------------------------------

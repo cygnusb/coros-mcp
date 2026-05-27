@@ -975,7 +975,8 @@ def _build_strength_program_payload(
     /training/program/add accepts and that schedule/update accepts inline.
 
     by_id is the catalog lookup ({id: catalog_entry}) used to populate per-
-    exercise muscle/part/equipment metadata. Pass {} to skip catalog enrichment.
+    exercise muscle/part/equipment metadata and animationId (video guidance).
+    Pass {} to skip catalog enrichment.
 
     Validation (raises ValueError):
       - empty exercises
@@ -1060,8 +1061,10 @@ def _build_strength_program_payload(
         muscle_relevance = cat.get("muscleRelevance") or []
         part = cat.get("part") or []
         equipment = cat.get("equipment") or []
+        animation_id = cat.get("animationId", 0)
 
         built.append({
+            "animationId": animation_id,
             "exerciseKind": 0,
             "exerciseType": 2,
             "gradeSystem": 0,
