@@ -620,9 +620,9 @@ async def fetch_activity_detail(auth: StoredAuth, activity_id: str, sport_type: 
 # IntensityType values: 1=weight, 2=HR, 3=pace, 4=speed, 5=none, 6=power, 7=cadence
 
 WORKOUT_SPORT_NAMES: dict[int, str] = {
+    1: "Running",
     2: "Indoor Cycling",
     4: "Strength",
-    100: "Running",
     200: "Road Bike",
     201: "Indoor Cycling (alt)",
 }
@@ -727,10 +727,14 @@ def _build_workout_program_payload(
     sport_type: int = 2,
     intensity_type: int = 6,
 ) -> dict:
-    """Sync builder for the cycling/intervals program dict.
+    """Sync builder for the cycling/intervals/running program dict.
 
     steps: list of dicts — either plain steps or repeat groups (see
     save_workout_template docstring).
+
+    sport_type=100 builds a running program (mapped to the workout-side
+    sport ID and given the metadata block COROS requires for runs).
+    Cycling (the default) is unchanged.
     """
     if not steps:
         raise ValueError("workout requires at least one step")
@@ -738,6 +742,12 @@ def _build_workout_program_payload(
     top_index = 0  # counts top-level positions for sortNo
     total_seconds = 0
     ex_id = 0  # sequential exercise IDs (API uses these to link groups)
+
+    # Workout API uses sportType=1 for Running; activity API uses
+    # sportType=100. Accept the activity-side ID (matches list_activities)
+    # and map to the workout-side ID for the payload.
+    is_running = sport_type == 100
+    wire_sport_type = 1 if is_running else sport_type
 
     for step in steps:
         if "repeat" in step:
@@ -757,7 +767,7 @@ def _build_workout_program_payload(
                 "id": group_id,
                 "name": "Group",
                 "exerciseType": 0,
-                "sportType": sport_type,
+                "sportType": wire_sport_type,
                 "intensityType": 0,
                 "intensityValue": 0,
                 "targetType": 2,
@@ -778,7 +788,7 @@ def _build_workout_program_payload(
                     "id": ex_id,
                     "name": sub["name"],
                     "exerciseType": 2,
-                    "sportType": sport_type,
+                    "sportType": wire_sport_type,
                     "intensityType": intensity_type,
                     "intensityValue": sub.get("intensity_low", sub.get("power_low_w", 0)),
                     "intensityValueExtend": sub.get("intensity_high", sub.get("power_high_w", 0)),
@@ -802,7 +812,7 @@ def _build_workout_program_payload(
                 "id": ex_id,
                 "name": step["name"],
                 "exerciseType": 2,
-                "sportType": sport_type,
+                "sportType": wire_sport_type,
                 "intensityType": intensity_type,
                 "intensityValue": step.get("intensity_low", step.get("power_low_w", 0)),
                 "intensityValueExtend": step.get("intensity_high", step.get("power_high_w", 0)),
@@ -817,13 +827,67 @@ def _build_workout_program_payload(
                 "originId": "0",
             })
 
-    return {
+    payload = {
         "name": name,
-        "sportType": sport_type,
+        "sportType": wire_sport_type,
         "estimatedTime": total_seconds,
         "access": 1,
         "exercises": exercises,
     }
+
+    # Running programs need the same metadata block strength programs
+    # carry. Without it the COROS app fails to parse the entry or renders
+    # it as strength on the watch.
+    if is_running:
+        # Per-step exerciseType: 1=warmup, 2=main, 3=cooldown.
+        # hrType=2 marks HR-based targets.
+        plain_exercises = [e for e in exercises if not e.get("isGroup")]
+        last_idx = len(plain_exercises) - 1
+        for i, ex in enumerate(plain_exercises):
+            if i == 0 and last_idx > 0:
+                ex["exerciseType"] = 1   # warmup
+            elif i == last_idx and last_idx > 0:
+                ex["exerciseType"] = 3   # cooldown
+            else:
+                ex["exerciseType"] = 2   # main / single-step
+            ex.setdefault("exerciseKind", 0)
+            ex.setdefault("gradeSystem", 0)
+            ex["hrType"] = 2 if intensity_type == 2 else 0
+            ex.setdefault("intensityMultiplier", 0)
+            ex.setdefault("intensityPercent", 0)
+            ex.setdefault("intensityPercentExtend", 0)
+            ex.setdefault("onsightGradeOffset", 0)
+            ex.setdefault("overview", "")
+            ex.setdefault("packageTime", 0)
+            ex.setdefault("sourceId", "0")
+            ex.setdefault("subType", 0)
+            ex.setdefault("targetDisplayUnit", 0)
+        payload.update({
+            "duration": total_seconds,
+            "exerciseNum": len(exercises),
+            "gradeSystemVersion": 0,
+            "hybridTotalSets": 0,
+            "overview": "",
+            "poolLength": 0,
+            "poolLengthId": 0,
+            "poolLengthUnit": 0,
+            "referExercise": {
+                "gradeSystem": 0,
+                "hrType": 3 if intensity_type == 2 else 0,
+                "intensityType": 0,
+                "valueType": 1,
+            },
+            "sourceUrl": "",
+            # subType=65535 marks a structured workout (shared with strength).
+            "subType": 65535,
+            "totalSets": len(exercises),
+            "trainingLoad": 0,
+            "type": 0,
+            "videoCoverUrl": "",
+            "videoUrl": "",
+        })
+
+    return payload
 
 
 async def save_workout_template(

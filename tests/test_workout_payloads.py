@@ -332,6 +332,106 @@ def test_cycling_sport_and_intensity_types_propagate():
 
 
 # ---------------------------------------------------------------------------
+# Running builder (sport_type=100 → workout namespace sportType=1)
+# ---------------------------------------------------------------------------
+
+def test_running_maps_activity_id_to_workout_id():
+    """sport_type=100 (activity namespace) is rewritten to sportType=1
+    (workout namespace) at program and exercise level."""
+    payload = _build_workout_program_payload(
+        name="Easy Z2 run",
+        steps=[
+            {"name": "Warm-up", "duration_minutes": 5,  "intensity_low": 100, "intensity_high": 130},
+            {"name": "Z2",      "duration_minutes": 20, "intensity_low": 125, "intensity_high": 145},
+            {"name": "Cool",    "duration_minutes": 5,  "intensity_low": 100, "intensity_high": 130},
+        ],
+        sport_type=100,
+        intensity_type=2,
+    )
+    assert payload["sportType"] == 1
+    for ex in payload["exercises"]:
+        assert ex["sportType"] == 1
+
+
+def test_running_emits_structured_workout_metadata():
+    """Running programs carry the structured-workout metadata block
+    (referExercise, subType=65535, type=0, etc.)."""
+    payload = _build_workout_program_payload(
+        name="r",
+        steps=[
+            {"name": "W", "duration_minutes": 5,  "intensity_low": 100, "intensity_high": 130},
+            {"name": "M", "duration_minutes": 20, "intensity_low": 125, "intensity_high": 145},
+            {"name": "C", "duration_minutes": 5,  "intensity_low": 100, "intensity_high": 130},
+        ],
+        sport_type=100,
+        intensity_type=2,
+    )
+    assert payload["subType"] == 65535
+    assert payload["type"] == 0
+    assert payload["referExercise"] == {
+        "gradeSystem": 0, "hrType": 3, "intensityType": 0, "valueType": 1,
+    }
+    assert payload["totalSets"] == 3
+    assert payload["duration"] == (5 + 20 + 5) * 60
+
+
+def test_running_exercise_type_varies_by_position():
+    """Per-step exerciseType: 1=warmup, 2=main, 3=cooldown."""
+    payload = _build_workout_program_payload(
+        name="r",
+        steps=[
+            {"name": "W", "duration_minutes": 5,  "intensity_low": 100, "intensity_high": 130},
+            {"name": "M", "duration_minutes": 20, "intensity_low": 125, "intensity_high": 145},
+            {"name": "C", "duration_minutes": 5,  "intensity_low": 100, "intensity_high": 130},
+        ],
+        sport_type=100,
+        intensity_type=2,
+    )
+    assert [ex["exerciseType"] for ex in payload["exercises"]] == [1, 2, 3]
+
+
+def test_running_single_step_uses_main_exercise_type():
+    """A single-step run is the main block (exerciseType=2), not warmup/cooldown."""
+    payload = _build_workout_program_payload(
+        name="open",
+        steps=[{"name": "Run", "duration_minutes": 30, "intensity_low": 0, "intensity_high": 0}],
+        sport_type=100,
+        intensity_type=5,
+    )
+    assert payload["exercises"][0]["exerciseType"] == 2
+    assert payload["exercises"][0]["hrType"] == 0
+    assert payload["referExercise"]["hrType"] == 0
+
+
+def test_running_hr_intensity_marks_hr_type():
+    """intensity_type=2 (HR) sets hrType=2 per step and referExercise.hrType=3."""
+    payload = _build_workout_program_payload(
+        name="r",
+        steps=[
+            {"name": "W", "duration_minutes": 5,  "intensity_low": 100, "intensity_high": 130},
+            {"name": "M", "duration_minutes": 20, "intensity_low": 125, "intensity_high": 145},
+        ],
+        sport_type=100,
+        intensity_type=2,
+    )
+    assert all(ex["hrType"] == 2 for ex in payload["exercises"])
+    assert payload["referExercise"]["hrType"] == 3
+
+
+def test_running_does_not_affect_cycling():
+    """Cycling programs keep their existing sparse shape (no metadata block)."""
+    payload = _build_workout_program_payload(
+        name="c",
+        steps=[{"name": "ride", "duration_minutes": 30, "intensity_low": 200, "intensity_high": 250}],
+        sport_type=2,
+    )
+    assert payload["sportType"] == 2
+    assert "subType" not in payload
+    assert "referExercise" not in payload
+    assert "type" not in payload
+
+
+# ---------------------------------------------------------------------------
 # Strength catalog cache (_load_strength_catalog)
 # ---------------------------------------------------------------------------
 
