@@ -431,6 +431,105 @@ def test_running_does_not_affect_cycling():
     assert "type" not in payload
 
 
+def test_cycling_payload_top_level_keys_are_exact():
+    """Cycling payload must not leak the running metadata block — its
+    top-level key set is exactly the sparse five."""
+    payload = _build_workout_program_payload(
+        name="c",
+        steps=[
+            {"name": "warm", "duration_minutes": 10, "intensity_low": 150, "intensity_high": 175},
+            {"repeat": 3, "steps": [
+                {"name": "on",  "duration_minutes": 5, "intensity_low": 265, "intensity_high": 285},
+                {"name": "off", "duration_minutes": 3, "intensity_low": 150, "intensity_high": 175},
+            ]},
+            {"name": "cool", "duration_minutes": 10, "intensity_low": 100, "intensity_high": 165},
+        ],
+        sport_type=2,
+    )
+    assert set(payload.keys()) == {"name", "sportType", "estimatedTime", "access", "exercises"}
+
+
+def test_running_repeat_group_substeps_are_main():
+    """[warmup, repeat(3× [hard, easy]), cooldown]: only the top-level
+    warmup is exerciseType=1 and only the cooldown is 3; every sub-step
+    inside the group stays main (2), and the group container stays 0."""
+    payload = _build_workout_program_payload(
+        name="intervals",
+        steps=[
+            {"name": "Warm", "duration_minutes": 10, "intensity_low": 120, "intensity_high": 140},
+            {"repeat": 3, "steps": [
+                {"name": "Hard", "duration_minutes": 3, "intensity_low": 165, "intensity_high": 175},
+                {"name": "Easy", "duration_minutes": 2, "intensity_low": 120, "intensity_high": 140},
+            ]},
+            {"name": "Cool", "duration_minutes": 10, "intensity_low": 120, "intensity_high": 140},
+        ],
+        sport_type=100,
+        intensity_type=2,
+    )
+    exercises = payload["exercises"]
+    # Order: warmup, group, hard, easy, cooldown
+    assert [ex["exerciseType"] for ex in exercises] == [1, 0, 2, 2, 3]
+    # Every repeat sub-step (groupId != "0", not the container) is main.
+    sub_steps = [e for e in exercises if not e.get("isGroup") and e.get("groupId") != "0"]
+    assert len(sub_steps) == 2
+    assert all(ex["exerciseType"] == 2 for ex in sub_steps)
+    # Exactly one warmup and one cooldown across the whole workout.
+    assert sum(ex["exerciseType"] == 1 for ex in exercises) == 1
+    assert sum(ex["exerciseType"] == 3 for ex in exercises) == 1
+    # Sub-steps still carry the per-step run metadata so they render.
+    assert all(ex["hrType"] == 2 for ex in sub_steps)
+
+
+def test_running_repeat_group_only_all_main():
+    """[repeat(3× [hard, easy])] with no surrounding plain steps: both
+    sub-steps are main (2) — never warmup/cooldown."""
+    payload = _build_workout_program_payload(
+        name="just intervals",
+        steps=[
+            {"repeat": 3, "steps": [
+                {"name": "Hard", "duration_minutes": 3, "intensity_low": 165, "intensity_high": 175},
+                {"name": "Easy", "duration_minutes": 2, "intensity_low": 120, "intensity_high": 140},
+            ]},
+        ],
+        sport_type=100,
+        intensity_type=2,
+    )
+    exercises = payload["exercises"]
+    assert [ex["exerciseType"] for ex in exercises] == [0, 2, 2]
+    assert not any(ex["exerciseType"] in (1, 3) for ex in exercises)
+
+
+@pytest.mark.parametrize("sport_type", [102, 103])
+def test_trail_and_track_map_to_running(sport_type):
+    """Trail (102) and Track (103) Running are run flavors too — they map to
+    wire sportType=1 and get the same metadata block, not a bare payload."""
+    payload = _build_workout_program_payload(
+        name="r",
+        steps=[
+            {"name": "W", "duration_minutes": 5,  "intensity_low": 100, "intensity_high": 130},
+            {"name": "M", "duration_minutes": 20, "intensity_low": 125, "intensity_high": 145},
+            {"name": "C", "duration_minutes": 5,  "intensity_low": 100, "intensity_high": 130},
+        ],
+        sport_type=sport_type,
+        intensity_type=2,
+    )
+    assert payload["sportType"] == 1
+    assert all(ex["sportType"] == 1 for ex in payload["exercises"])
+    assert payload["subType"] == 65535
+    assert "referExercise" in payload
+
+
+def test_wire_sport_type_id_is_rejected():
+    """Passing the workout-API wire ID (1) directly is rejected — callers
+    must use the activity-namespace ID (100) so the metadata block applies."""
+    with pytest.raises(ValueError, match="sport_type=100"):
+        _build_workout_program_payload(
+            name="r",
+            steps=[{"name": "Run", "duration_minutes": 30, "intensity_low": 0, "intensity_high": 0}],
+            sport_type=1,
+        )
+
+
 # ---------------------------------------------------------------------------
 # Strength catalog cache (_load_strength_catalog)
 # ---------------------------------------------------------------------------

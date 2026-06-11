@@ -141,13 +141,13 @@ async def get_help() -> dict:
             {"name": "list_workout_templates", "description": "List reusable workout templates saved in the Coros library"},  # noqa: E501
             {"name": "list_training_plans", "description": "List training plans saved in the Coros Training Hub"},  # noqa: E501
             {"name": "list_training_plans_raw", "description": "List raw training plans including entities and programs"},  # noqa: E501
-            {"name": "save_workout_template", "description": "Save a reusable cycling/intervals workout template to the library"},  # noqa: E501
+            {"name": "save_workout_template", "description": "Save a reusable cycling/intervals/running workout template to the library"},  # noqa: E501
             {"name": "save_strength_workout_template", "description": "Save a reusable strength workout template to the library"},  # noqa: E501
             {"name": "delete_workout_template", "description": "Delete a saved workout template by workout_id"},
             {"name": "list_planned_activities", "description": "List workouts scheduled on the training calendar"},
             {"name": "list_planned_activities_raw", "description": "List raw scheduled workouts for calendar update workflows"},  # noqa: E501
             {"name": "calculate_workout_program", "description": "Recalculate edited workout program metrics before updating"},  # noqa: E501
-            {"name": "schedule_workout", "description": "Schedule a one-off cycling/intervals workout for a date (no library entry)"},  # noqa: E501
+            {"name": "schedule_workout", "description": "Schedule a one-off cycling/intervals/running workout for a date (no library entry)"},  # noqa: E501
             {"name": "add_planned_workout", "description": "Add an inline planned workout to the training calendar from raw objects"},  # noqa: E501
             {"name": "update_scheduled_workout", "description": "Update an existing scheduled workout on the calendar"},  # noqa: E501
             {"name": "schedule_strength_workout", "description": "Schedule a one-off strength workout for a date (no library entry)"},  # noqa: E501
@@ -660,7 +660,7 @@ async def save_workout_template(
     intensity_type: int = 6,
 ) -> dict:
     """
-    Save a REUSABLE cycling/intervals workout TEMPLATE to the Coros library.
+    Save a REUSABLE cycling/intervals/running workout TEMPLATE to the Coros library.
 
     ⚠️ This persists to the library indefinitely. Use ONLY when the user
     explicitly asks to "save as a template", "create a workout in my
@@ -708,11 +708,18 @@ async def save_workout_template(
         ]
 
     sport_type : int
-        Sport type ID. Default 2 = Indoor Cycling (Rollen).
-        Use 200 for Road Bike (outdoor), 201 for Indoor Cycling (alt).
+        Sport type ID, in the ACTIVITY namespace (the same IDs list_activities
+        returns). Default 2 = Indoor Cycling (Rollen).
+        - Cycling: 2 = Indoor Cycling (Rollen), 200 = Road Bike (outdoor),
+          201 = Indoor Cycling (alt)
+        - Running: 100 = Running, 102 = Trail Running, 103 = Track Running
+        Running IDs are mapped internally to the workout-API wire ID
+        (sportType=1) and given the metadata block COROS requires for runs.
+        Do NOT pass 1 directly — it's the internal wire ID and is rejected.
     intensity_type : int
         Intensity type ID. Default 6 = power in watts.
         Other IntensityType values: 1=weight, 2=HR, 3=pace, 4=speed, 5=none, 6=power, 7=cadence
+        For runs, 2 (HR) is typical.
 
     Returns
     -------
@@ -942,7 +949,7 @@ async def schedule_workout(
     sort_no: int = 1,
 ) -> dict:
     """
-    Schedule a ONE-OFF cycling/intervals workout for a specific date.
+    Schedule a ONE-OFF cycling/intervals/running workout for a specific date.
 
     This is the COMMON case. Use this whenever the user wants a workout
     on a specific date and doesn't explicitly ask for a reusable template.
@@ -965,9 +972,13 @@ async def schedule_workout(
     happen_day : str
         Date in YYYYMMDD format.
     sport_type : int
-        Sport type ID (default 2 = Indoor Cycling).
+        Sport type ID, in the ACTIVITY namespace (as list_activities returns).
+        Default 2 = Indoor Cycling. 200 = Road Bike, 201 = Indoor Cycling (alt).
+        100 = Running, 102 = Trail Running, 103 = Track Running — these map
+        internally to the workout wire ID (sportType=1) and get the running
+        metadata block. Don't pass 1 directly (it's the wire ID and is rejected).
     intensity_type : int
-        Intensity type ID (default 6 = power in watts).
+        Intensity type ID (default 6 = power in watts; use 2 = HR for runs).
     sort_no : int
         Order within the day (default 1).
 
