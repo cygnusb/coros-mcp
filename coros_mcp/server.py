@@ -2,14 +2,14 @@
 Coros MCP Server — Sleep, HRV, and training data via the unofficial Coros API.
 
 Usage:
-    python server.py
+    coros-mcp serve
 
 MCP config (Claude Code):
     claude mcp add coros \\
       -e COROS_EMAIL=you@example.com \\
       -e COROS_PASSWORD=yourpass \\
       -e COROS_REGION=eu \\
-      -- python /path/to/coros-mcp/server.py
+      -- /path/to/coros-mcp/.venv/bin/coros-mcp serve
 
 Alternatively, create a .env file in the project directory with the same
 variables. If COROS_EMAIL and COROS_PASSWORD are set (via env or .env), the
@@ -20,21 +20,22 @@ transparently whenever the stored token is expired or rejected.
 import time
 from datetime import datetime, timedelta
 
+import httpx
 from dotenv import load_dotenv
 from fastmcp import FastMCP
 
-import coros_api
-from cache.store import cache_status, init_db
-from cache.sync import (
+from coros_mcp import coros_api
+from coros_mcp.cache.store import cache_status, init_db
+from coros_mcp.cache.sync import (
     fetch_activities_cached,
     fetch_daily_records_cached,
     fetch_sleep_cached,
 )
-from cache.sync import (
+from coros_mcp.cache.sync import (
     sync_all as _sync_all,
 )
-from cache.utils import LOCAL_TZ, fmt_local_time
-from coros_api import TOKEN_TTL_MS
+from coros_mcp.cache.utils import LOCAL_TZ, fmt_local_time
+from coros_mcp.coros_api import TOKEN_TTL_MS
 
 load_dotenv()
 init_db()
@@ -52,11 +53,34 @@ async def _get_auth():
     return auth
 
 
-async def _run_with_auth(fn, auth, *args, **kwargs):
-    """Call fn(auth, …). On exception, re-login from env vars and retry once."""
+# Coros result codes that indicate an invalid/expired token (re-login fixes
+# them). "1019" is confirmed for the mobile API; extend as further codes are
+# observed.
+_AUTH_RESULT_CODES = frozenset({"1019"})
+
+
+def _is_auth_error(exc: Exception) -> bool:
+    if isinstance(exc, httpx.HTTPStatusError) and exc.response.status_code in (401, 403):
+        return True
+    return isinstance(exc, coros_api.CorosAPIError) and exc.code in _AUTH_RESULT_CODES
+
+
+async def _run_with_auth(fn, auth, *args, retry_all: bool = True, **kwargs):
+    """Call fn(auth, …). On failure, re-login from env vars and retry once.
+
+    retry_all=True (reads / idempotent calls): any exception triggers the
+    re-login + retry, maximizing resilience.
+
+    retry_all=False (non-idempotent writes like creating or scheduling a
+    workout): only auth-related failures are retried. A blind retry could
+    apply the write twice on the server when the first request succeeded
+    but its response was lost.
+    """
     try:
         return await fn(auth, *args, **kwargs)
-    except Exception:
+    except Exception as exc:
+        if not retry_all and not _is_auth_error(exc):
+            raise
         new_auth = await coros_api.try_auto_login()
         if new_auth is None:
             raise
@@ -272,8 +296,9 @@ async def get_daily_metrics(weeks: int = 4) -> dict:
 
     Historical data is served from the local SQLite cache (fast); only the
     uncached tail is fetched from the Coros API. The underlying API endpoint
-    supports up to 24 weeks per call, but the cache layer handles longer
-    ranges transparently by reading stored records directly.
+    supports up to 24 weeks per call; the cache layer fetches longer uncached
+    ranges in 12-week chunks, so any range up to 52 weeks works even on a
+    cold cache.
 
     Parameters
     ----------
@@ -573,7 +598,8 @@ async def save_workout_template(
         return {"error": _NOT_AUTHENTICATED}
     try:
         workout_id = await _run_with_auth(
-            coros_api.save_workout_template, auth, name, steps, sport_type, intensity_type
+            coros_api.save_workout_template, auth, name, steps, sport_type, intensity_type,
+            retry_all=False,
         )
         total_minutes, steps_count = _summarize_steps(steps)
         return {
@@ -705,7 +731,8 @@ async def schedule_workout_template(
         return {"error": _NOT_AUTHENTICATED}
     try:
         response = await _run_with_auth(
-            coros_api.schedule_workout_template, auth, workout_id, happen_day, sort_no
+            coros_api.schedule_workout_template, auth, workout_id, happen_day, sort_no,
+            retry_all=False,
         )
         return _attach_enrichment_warning(
             {
@@ -789,6 +816,7 @@ async def schedule_workout(
             sport_type,
             intensity_type,
             sort_no,
+            retry_all=False,
         )
         total_minutes, steps_count = _summarize_steps(steps)
         return _attach_enrichment_warning(
@@ -874,6 +902,7 @@ async def schedule_strength_workout(
             happen_day,
             sets,
             sort_no,
+            retry_all=False,
         )
         return _attach_enrichment_warning(
             {
@@ -997,7 +1026,10 @@ async def save_strength_workout_template(
     if auth is None:
         return {"error": _NOT_AUTHENTICATED}
     try:
-        workout_id = await _run_with_auth(coros_api.save_strength_workout_template, auth, name, exercises, sets)
+        workout_id = await _run_with_auth(
+            coros_api.save_strength_workout_template, auth, name, exercises, sets,
+            retry_all=False,
+        )
         return {
             "workout_id": workout_id,
             "name": name,

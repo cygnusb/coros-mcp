@@ -2,6 +2,13 @@
 
 Fallback for environments where system keyring is unavailable.
 Uses AES-256-GCM with a machine-bound key.
+
+Security note: the key is derived from non-secret machine identifiers
+(hostname, platform UUID / /etc/machine-id), all readable by any local
+process. This is machine *binding*, not encryption against a local
+attacker — it protects the file when it leaks off-machine (backups,
+copied home directories). On-machine protection comes from the 0600
+file permissions.
 """
 
 import base64
@@ -15,7 +22,7 @@ from pathlib import Path
 
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
-from auth.keyring_store import CredentialResult
+from coros_mcp.auth.keyring_store import CredentialResult
 
 CONFIG_DIR = Path.home() / ".config" / "coros-mcp"
 CREDENTIALS_FILE = CONFIG_DIR / "auth.enc"

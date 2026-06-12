@@ -4,8 +4,8 @@ import getpass
 import sys
 import time
 
-from auth.storage import clear_token, get_token, is_keyring_available
-from coros_api import TOKEN_TTL_MS, get_stored_auth, login, login_mobile, try_auto_login
+from coros_mcp.auth.storage import clear_token, get_token, is_keyring_available
+from coros_mcp.coros_api import TOKEN_TTL_MS, get_stored_auth, login, login_mobile, try_auto_login
 
 
 def _prompt_credentials() -> tuple[str, str, str]:
@@ -21,9 +21,9 @@ def _prompt_credentials() -> tuple[str, str, str]:
         sys.exit(1)
 
     print()
-    print("Region options: eu, us, asia")
+    print("Region options: eu, us, asia, cn")
     region = input("Region [eu]: ").strip().lower() or "eu"
-    if region not in ("eu", "us", "asia"):
+    if region not in ("eu", "us", "asia", "cn"):
         print(f"Warning: unknown region '{region}', using it anyway.")
     return email, password, region
 
@@ -137,7 +137,7 @@ def cmd_sync() -> int:
     import argparse
     from datetime import datetime, timedelta
 
-    from cache.sync import sync_all
+    from coros_mcp.cache.sync import sync_all
 
     parser = argparse.ArgumentParser(
         prog="coros-mcp sync",
@@ -202,7 +202,7 @@ def cmd_sync() -> int:
 
 def cmd_cache_status() -> int:
     """Show local cache coverage."""
-    from cache.store import cache_status, init_db
+    from coros_mcp.cache.store import cache_status, init_db
     init_db()
     c = cache_status()
     print(f"Cache: {c['db_path']}")
@@ -218,7 +218,7 @@ def cmd_cache_status() -> int:
 
 def cmd_serve() -> int:
     """Start the MCP server (stdio mode)."""
-    import server
+    from coros_mcp import server
     server.main()
     return 0
 

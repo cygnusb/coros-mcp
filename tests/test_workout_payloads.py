@@ -11,8 +11,8 @@ from unittest.mock import AsyncMock
 import httpx
 import pytest
 
-import coros_api
-from coros_api import (
+from coros_mcp import coros_api
+from coros_mcp.coros_api import (
     _build_strength_program_payload,
     _build_workout_program_payload,
     _load_strength_catalog,

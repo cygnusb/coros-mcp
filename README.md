@@ -500,12 +500,13 @@ Returns per data type: `count`, `from` (earliest date), `to` (latest date). Also
 
 ```
 coros-mcp/
-├── server.py          # MCP server with tool definitions
-├── coros_api.py       # Coros API client (auth, requests, parsers)
-├── models.py          # Pydantic data models
-├── cli.py             # CLI entry point (serve, auth, sync, cache-status, …)
-├── auth/              # Token storage (keyring + encrypted file fallback)
-├── cache/             # SQLite cache layer (store, sync, utils)
+├── coros_mcp/
+│   ├── server.py      # MCP server with tool definitions
+│   ├── coros_api.py   # Coros API client (auth, requests, parsers)
+│   ├── models.py      # Pydantic data models
+│   ├── cli.py         # CLI entry point (serve, auth, sync, cache-status, …)
+│   ├── auth/          # Token storage (keyring + encrypted file fallback)
+│   └── cache/         # SQLite cache layer (store, sync, utils)
 ├── tests/             # pytest test suite
 ├── pyproject.toml     # Project metadata & dependencies
 └── docs/
@@ -517,7 +518,7 @@ coros-mcp/
 - [fastmcp](https://github.com/jlowin/fastmcp) — MCP framework
 - [httpx](https://www.python-httpx.org/) — Async HTTP client
 - [pydantic](https://docs.pydantic.dev/) — Data validation
-- [pycryptodome](https://pycryptodome.readthedocs.io/) — AES encryption for mobile API auth
+- [cryptography](https://cryptography.io/) — AES encryption (mobile API auth + token file)
 - [keyring](https://github.com/jaraco/keyring) — Secure token storage
 - [python-dotenv](https://github.com/theskumar/python-dotenv) — `.env` support
 

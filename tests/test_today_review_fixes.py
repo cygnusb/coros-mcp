@@ -31,7 +31,7 @@ class TestParseActivityZeroValues:
         return {"labelId": "42", "sportType": 402, **kwargs}
 
     def _parse(self, item):
-        from coros_api import _parse_activity
+        from coros_mcp.coros_api import _parse_activity
         return _parse_activity(item)
 
     # distance
@@ -93,24 +93,24 @@ class TestParseActivityZeroValues:
 class TestBridgeWarning(unittest.TestCase):
 
     def _resolve(self, min_cached, max_cached, start_day, end_day, cutoff="20260412"):
-        from cache.sync import _resolve_fetch_range
+        from coros_mcp.cache.sync import _resolve_fetch_range
         return _resolve_fetch_range(min_cached, max_cached, start_day, end_day, cutoff)
 
     def test_warning_emitted_when_bridge_extends_range(self):
         """A historical gap that requires bridging past end_day must emit a warning."""
-        with self.assertLogs("cache.sync", level="WARNING") as cm:
+        with self.assertLogs("coros_mcp.cache.sync", level="WARNING") as cm:
             self._resolve("20260301", "20260414", "20240101", "20240630")
         assert any("bridge" in msg.lower() for msg in cm.output)
 
     def test_no_warning_when_end_day_already_reaches_min_cached(self):
         """If end_day already overlaps min_cached, no bridge extension → no warning."""
-        with patch("cache.sync.logger") as mock_logger:
+        with patch("coros_mcp.cache.sync.logger") as mock_logger:
             self._resolve("20260301", "20260414", "20250101", "20260315")
         mock_logger.warning.assert_not_called()
 
     def test_no_warning_on_tail_gap(self):
         """Tail-only gaps never trigger the bridge warning."""
-        with patch("cache.sync.logger") as mock_logger:
+        with patch("coros_mcp.cache.sync.logger") as mock_logger:
             self._resolve("20260301", "20260410", "20260305", "20260420")
         mock_logger.warning.assert_not_called()
 
@@ -122,7 +122,7 @@ class TestBridgeWarning(unittest.TestCase):
 class TestParseTzOffset:
 
     def _parse(self, value):
-        from cache.utils import _parse_tz_offset
+        from coros_mcp.cache.utils import _parse_tz_offset
         return _parse_tz_offset(value)
 
     def test_integer_positive(self):
@@ -173,8 +173,8 @@ class TestTodayHonoursCOROSTIMEZONE:
             # Remove COROS_TIMEZONE if not set
             if tz_value is None:
                 os.environ.pop("COROS_TIMEZONE", None)
-            import cache.sync as sync_mod
-            import cache.utils as utils_mod
+            import coros_mcp.cache.sync as sync_mod
+            import coros_mcp.cache.utils as utils_mod
             importlib.reload(utils_mod)
             importlib.reload(sync_mod)
             return sync_mod._today
@@ -187,7 +187,7 @@ class TestTodayHonoursCOROSTIMEZONE:
 
         _today = self._reload_utils_and_sync("8")
 
-        with patch("cache.sync.datetime") as mock_dt:
+        with patch("coros_mcp.cache.sync.datetime") as mock_dt:
             mock_dt.now.side_effect = lambda tz=None: (
                 fake_utc.astimezone(tz) if tz else fake_utc.replace(tzinfo=None)
             )
@@ -201,7 +201,7 @@ class TestTodayHonoursCOROSTIMEZONE:
         """Without COROS_TIMEZONE, _today() calls datetime.now() without tz."""
         _today = self._reload_utils_and_sync(None)
 
-        with patch("cache.sync.datetime") as mock_dt:
+        with patch("coros_mcp.cache.sync.datetime") as mock_dt:
             from datetime import datetime
             mock_dt.now.return_value = datetime(2026, 4, 16, 10, 0, 0)
             result = _today()
@@ -222,25 +222,25 @@ class TestCmdSyncArgparse:
             patch.object(sys, "argv", ["coros-mcp", "sync", "--unknown-flag"]),
             pytest.raises(SystemExit) as exc_info,
         ):
-            import cli
+            from coros_mcp import cli
             # Bypass auth by patching; we only care about arg parsing
-            with patch("cli.get_stored_auth", return_value=None), \
-                 patch("cli.try_auto_login", return_value=None):
+            with patch("coros_mcp.cli.get_stored_auth", return_value=None), \
+                 patch("coros_mcp.cli.try_auto_login", return_value=None):
                 cli.cmd_sync()
         assert exc_info.value.code != 0
 
     def test_help_exits_zero(self):
         with patch.object(sys, "argv", ["coros-mcp", "sync", "--help"]), pytest.raises(SystemExit) as exc_info:
-            import cli
+            from coros_mcp import cli
             cli.cmd_sync()
         assert exc_info.value.code == 0
 
     def test_valid_flags_parsed(self):
         """--from and --to must be accepted without error."""
         with patch.object(sys, "argv", ["coros-mcp", "sync", "--from", "20250101", "--to", "20250630"]), \
-             patch("cli.get_stored_auth", return_value=None), \
-             patch("cli.try_auto_login", return_value=None):
-            import cli
+             patch("coros_mcp.cli.get_stored_auth", return_value=None), \
+             patch("coros_mcp.cli.try_auto_login", return_value=None):
+            from coros_mcp import cli
             result = cli.cmd_sync()
         # Returns 1 because auth fails, not because argparse rejected the flags
         assert result == 1
@@ -255,18 +255,18 @@ class TestLoadDotenvNotAtImport:
     def test_import_cli_does_not_call_load_dotenv(self):
         """Importing cli must not trigger load_dotenv — it belongs in main()."""
         # Remove cli from sys.modules so it re-imports cleanly
-        sys.modules.pop("cli", None)
+        sys.modules.pop("coros_mcp.cli", None)
 
         with patch("dotenv.load_dotenv") as mock_load:
-            import cli  # noqa: F401
+            from coros_mcp import cli  # noqa: F401
             mock_load.assert_not_called()
 
     def test_main_calls_load_dotenv(self):
         """main() must call load_dotenv before dispatching."""
-        import cli
+        from coros_mcp import cli
 
         with patch("dotenv.load_dotenv") as mock_load, \
              patch.object(sys, "argv", ["coros-mcp", "help"]), \
-             patch("cli.cmd_help", return_value=0), contextlib.suppress(SystemExit):
+             patch("coros_mcp.cli.cmd_help", return_value=0), contextlib.suppress(SystemExit):
             cli.main()
         mock_load.assert_called_once()

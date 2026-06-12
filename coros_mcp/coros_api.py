@@ -7,17 +7,17 @@ Sleep phase data comes from the mobile API (/coros/data/statistic/daily on apieu
 """
 
 import asyncio
-import contextlib
 import hashlib
 import json
+import logging
 import os
 import random
 import time
 
 import httpx
 
-from auth.storage import get_token, store_token
-from models import (
+from coros_mcp.auth.storage import get_token, store_token
+from coros_mcp.models import (
     ActivitySummary,
     DailyRecord,
     HRVRecord,
@@ -25,6 +25,8 @@ from models import (
     SleepRecord,
     StoredAuth,
 )
+
+logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Endpoint constants
@@ -75,10 +77,26 @@ MOBILE_BASE_URLS = {
 TOKEN_TTL_MS = 24 * 60 * 60 * 1000  # 24 hours in milliseconds
 
 
+class CorosAPIError(ValueError):
+    """Coros API returned a non-success result code.
+
+    Carries the raw result code so callers can distinguish auth failures
+    (retryable after re-login) from other API errors.
+    """
+
+    def __init__(self, code: str, message: str):
+        super().__init__(message)
+        self.code = code
+
+
 def _check_response(body: dict, context: str) -> None:
-    """Raise ValueError if the Coros API response indicates an error."""
+    """Raise CorosAPIError if the Coros API response indicates an error."""
     if body.get("result") != "0000":
-        raise ValueError(f"Coros {context} error: {body.get('message', 'unknown error')}")
+        raise CorosAPIError(
+            str(body.get("result")),
+            f"Coros {context} error: {body.get('message', 'unknown error')} "
+            f"(result={body.get('result')})",
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -97,6 +115,7 @@ def _load_auth() -> StoredAuth | None:
         data = json.loads(result.token)
         return StoredAuth(**data)
     except Exception:
+        logger.debug("Failed to parse stored auth blob", exc_info=True)
         return None
 
 
@@ -121,15 +140,16 @@ def _mobile_encrypt(plaintext: str, app_key: str) -> str:
     """
     import base64
 
-    from Crypto.Cipher import AES
+    from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 
     key = app_key.encode("ascii")
     data = plaintext.encode("utf-8")
     xored = bytes(b ^ key[i % len(key)] for i, b in enumerate(data))
     pad_len = 16 - (len(xored) % 16)
     padded = xored + bytes([pad_len] * pad_len)
-    cipher = AES.new(key, AES.MODE_CBC, _MOBILE_AES_IV)
-    return base64.b64encode(cipher.encrypt(padded)).decode("ascii")
+    encryptor = Cipher(algorithms.AES(key), modes.CBC(_MOBILE_AES_IV)).encryptor()
+    ciphertext = encryptor.update(padded) + encryptor.finalize()
+    return base64.b64encode(ciphertext).decode("ascii")
 
 
 async def _mobile_login(email: str, password: str, region: str = "eu") -> tuple[str, dict]:
@@ -225,8 +245,10 @@ async def login(email: str, password: str, region: str = "eu", *, skip_mobile: b
     mobile_token = None
     mobile_payload = None
     if not skip_mobile:
-        with contextlib.suppress(Exception):
+        try:
             mobile_token, mobile_payload = await _mobile_login(email, password, region)
+        except Exception:
+            logger.debug("Mobile login failed during combined login", exc_info=True)
 
     auth = StoredAuth(
         access_token=data["accessToken"],
@@ -243,14 +265,23 @@ async def login(email: str, password: str, region: str = "eu", *, skip_mobile: b
 async def login_mobile(email: str, password: str, region: str = "eu") -> StoredAuth:
     """Authenticate against the Coros mobile API only and persist the token.
 
-    If an existing StoredAuth exists, updates only the mobile fields.
-    Otherwise creates a minimal StoredAuth with only mobile credentials.
+    If an existing StoredAuth exists, updates the mobile fields and the
+    region (a mobile token is only valid on its regional host, and a region
+    switch invalidates the old web token anyway). Otherwise creates a
+    minimal StoredAuth with only mobile credentials.
     """
     mobile_token, mobile_payload = await _mobile_login(email, password, region)
 
     existing = _load_auth()
     if existing:
+        if existing.region != region:
+            logger.warning(
+                "Mobile login region %r differs from stored region %r — "
+                "updating stored region; re-run web auth if web calls fail.",
+                region, existing.region,
+            )
         existing = existing.model_copy(update={
+            "region": region,
             "mobile_access_token": mobile_token,
             "mobile_login_payload": mobile_payload,
         })
@@ -272,23 +303,25 @@ async def login_mobile(email: str, password: str, region: str = "eu") -> StoredA
 def get_stored_auth() -> StoredAuth | None:
     """Return stored auth if it exists and is not expired.
 
-    When COROS_ACCESS_TOKEN env var is set, it takes precedence over
-    stored keyring/encrypted-file auth (for MCP server use cases where
-    keyring is not accessible in the subprocess).
+    When COROS_ACCESS_TOKEN env var is set, it replaces only the web access
+    token (for MCP server use cases where keyring is not accessible in the
+    subprocess). Stored user_id, region, and mobile token/payload are kept
+    so sleep data still works alongside an env-provided web token.
     """
     # Prefer explicit env var token when provided
     access_token = os.environ.get("COROS_ACCESS_TOKEN")
     if access_token:
-        region = os.environ.get("COROS_REGION", "eu")
+        stored = _load_auth()
+        region = os.environ.get("COROS_REGION") or (stored.region if stored else "eu")
         # Timestamp is set to now so the TTL check always passes — env-var
         # tokens are assumed to be externally managed and always valid.
         return StoredAuth(
             access_token=access_token,
-            user_id="env",
+            user_id=stored.user_id if stored else "env",
             region=region,
             timestamp=int(time.time() * 1000),
-            mobile_access_token=None,
-            mobile_login_payload=None,
+            mobile_access_token=stored.mobile_access_token if stored else None,
+            mobile_login_payload=stored.mobile_login_payload if stored else None,
         )
     # Fall back to stored auth
     auth = _load_auth()
@@ -321,6 +354,7 @@ async def try_auto_login() -> StoredAuth | None:
     try:
         return await login(email, password, region)  # skip_mobile=True by default
     except Exception:
+        logger.debug("Auto-login from env credentials failed", exc_info=True)
         return None
 
 
@@ -606,7 +640,7 @@ def _parse_workout(item: dict) -> dict:
         "id": str(item.get("id", "")),
         "name": item.get("name"),
         "sport_type": sport,
-        "sport_name": WORKOUT_SPORT_NAMES.get(sport, f"Sport {sport}"),
+        "sport_name": WORKOUT_SPORT_NAMES.get(sport, f"Sport {sport}") if sport is not None else None,
         "estimated_time_seconds": item.get("estimatedTime"),
         "exercise_count": item.get("exerciseNum", len(exercises)),
         "exercises": exercises,
@@ -801,7 +835,7 @@ async def _fetch_schedule_data(
     """Shared GET for /training/schedule/query. Returns the raw 'data' dict
     (no stripping). Takes a caller-provided client so internal flows can
     reuse a connection across multiple round-trips."""
-    params = {
+    params: dict[str, str | int] = {
         "startDate": start_day,
         "endDate": end_day,
         "supportRestExercise": 1,
@@ -1384,7 +1418,7 @@ async def fetch_exercises(auth: StoredAuth, sport_type: int) -> list[dict]:
     strength) that appear in planned workouts but have no inline detail.
     Returns the raw list of exercise definitions.
     """
-    params = {"userId": auth.user_id, "sportType": sport_type}
+    params: dict[str, str | int] = {"userId": auth.user_id, "sportType": sport_type}
     async with httpx.AsyncClient(timeout=30) as client:
         resp = await client.get(
             _base_url(auth.region) + ENDPOINTS["exercises"],
@@ -1441,6 +1475,7 @@ async def _refresh_mobile_token(auth: StoredAuth) -> bool:
         _save_auth(auth)
         return True
     except Exception:
+        logger.debug("Mobile token refresh via replay payload failed", exc_info=True)
         return False
 
 
@@ -1478,6 +1513,7 @@ async def _ensure_mobile_token(auth: StoredAuth) -> bool:
         _save_auth(auth)
         return True
     except Exception:
+        logger.debug("Fresh mobile login from env credentials failed", exc_info=True)
         return False
 
 
@@ -1514,6 +1550,10 @@ async def fetch_sleep(auth: StoredAuth, start_day: str, end_day: str) -> list[Sl
 
     async def _do_request(token: str) -> dict:
         async with httpx.AsyncClient(timeout=30) as client:
+            # Token is sent both as query param and header because the mobile
+            # app does the same — untested whether the header alone suffices.
+            # Note: the query param means the token appears in URLs (and thus
+            # in any intermediate proxy logs).
             resp = await client.post(
                 url,
                 params={"accessToken": token},
@@ -1523,13 +1563,14 @@ async def fetch_sleep(auth: StoredAuth, start_day: str, end_day: str) -> list[Sl
             resp.raise_for_status()
             return resp.json()
 
-    body = await _do_request(auth.mobile_access_token)
+    token = auth.mobile_access_token
+    assert token is not None  # guaranteed by _ensure_mobile_token above
+    body = await _do_request(token)
 
     if body.get("result") == "1019" and await _refresh_mobile_token(auth):  # token expired — auto-refresh once
-        body = await _do_request(auth.mobile_access_token)
+        body = await _do_request(auth.mobile_access_token or token)
 
-    if body.get("result") != "0000":
-        raise ValueError(f"Coros sleep API error: {body.get('message', 'unknown error')}")
+    _check_response(body, "sleep")
 
     records: list[SleepRecord] = []
     for item in body.get("data", {}).get("statisticData", {}).get("dayDataList", []):

@@ -26,7 +26,7 @@ MAX_C = "20260414"    # existing cache upper bound (today)
 
 
 def resolve(min_cached, max_cached, start_day, end_day, cutoff=CUTOFF):
-    from cache.sync import _resolve_fetch_range
+    from coros_mcp.cache.sync import _resolve_fetch_range
     return _resolve_fetch_range(min_cached, max_cached, start_day, end_day, cutoff)
 
 
@@ -133,23 +133,23 @@ class TestSyncAllContinuity:
         async def fake_fetch_activities(auth, start, end, page, size):
             return [], 0
 
-        with patch("cache.sync.get_max_daily_date", return_value=max_daily), \
-             patch("cache.sync.get_max_sleep_date", return_value=max_sleep), \
-             patch("cache.sync.get_max_activity_date", return_value=max_activity), \
-             patch("cache.sync.get_min_daily_date", return_value=None), \
-             patch("cache.sync.get_min_sleep_date", return_value=None), \
-             patch("cache.sync.get_min_activity_date", return_value=None), \
-             patch("cache.sync.init_db"), \
-             patch("cache.sync.upsert_daily_records"), \
-             patch("cache.sync.upsert_sleep_records"), \
-             patch("cache.sync.upsert_activities"), \
-             patch("cache.sync.get_activities", return_value=[]), \
-             patch("cache.sync.cache_status", return_value={}), \
-             patch("coros_api.fetch_daily_records", side_effect=fake_fetch_daily), \
-             patch("coros_api.fetch_sleep", side_effect=fake_fetch_sleep), \
-             patch("coros_api.fetch_activities", return_value=([], 0)):
+        with patch("coros_mcp.cache.sync.get_max_daily_date", return_value=max_daily), \
+             patch("coros_mcp.cache.sync.get_max_sleep_date", return_value=max_sleep), \
+             patch("coros_mcp.cache.sync.get_max_activity_date", return_value=max_activity), \
+             patch("coros_mcp.cache.sync.get_min_daily_date", return_value=None), \
+             patch("coros_mcp.cache.sync.get_min_sleep_date", return_value=None), \
+             patch("coros_mcp.cache.sync.get_min_activity_date", return_value=None), \
+             patch("coros_mcp.cache.sync.init_db"), \
+             patch("coros_mcp.cache.sync.upsert_daily_records"), \
+             patch("coros_mcp.cache.sync.upsert_sleep_records"), \
+             patch("coros_mcp.cache.sync.upsert_activities"), \
+             patch("coros_mcp.cache.sync.get_activities", return_value=[]), \
+             patch("coros_mcp.cache.sync.cache_status", return_value={}), \
+             patch("coros_mcp.coros_api.fetch_daily_records", side_effect=fake_fetch_daily), \
+             patch("coros_mcp.coros_api.fetch_sleep", side_effect=fake_fetch_sleep), \
+             patch("coros_mcp.coros_api.fetch_activities", return_value=([], 0)):
 
-            from cache.sync import sync_all
+            from coros_mcp.cache.sync import sync_all
             _ = await sync_all(
                 auth=MagicMock(),
                 start_day="20260301",
@@ -216,7 +216,7 @@ class TestStableAfterDaysEnvVar:
             env["COROS_STABLE_DAYS"] = value
 
         with patch.dict(os.environ, env, clear=True):
-            import cache.sync as sync_mod
+            import coros_mcp.cache.sync as sync_mod
             importlib.reload(sync_mod)
             return sync_mod.STABLE_AFTER_DAYS
 
@@ -241,7 +241,7 @@ class TestCliRedundantImport:
         imported at module level."""
         import inspect
 
-        import cli
+        from coros_mcp import cli
         src = inspect.getsource(cli.cmd_sync)
         assert "import asyncio" not in src, (
             "Redundant `import asyncio` still present inside cmd_sync"

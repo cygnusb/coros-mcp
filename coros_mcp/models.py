@@ -74,7 +74,11 @@ class StoredAuth(BaseModel):
     region: str
     timestamp: int  # Unix milliseconds
     mobile_access_token: str | None = None   # token for apieu.coros.com (sleep data)
-    mobile_login_payload: dict | None = None  # encrypted login body for auto-refresh
+    # Encrypted login body, replayed to refresh the mobile token. The Coros
+    # server accepts indefinite replay, so this payload is a long-lived
+    # credential equivalent — it is only ever persisted via the protected
+    # stores (keyring / 0600 encrypted file).
+    mobile_login_payload: dict | None = None
 
     def __repr__(self) -> str:
         tok = f"{self.access_token[:8]}…" if self.access_token else "None"

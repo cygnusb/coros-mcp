@@ -2,15 +2,15 @@
 
 import os
 
-from auth.encrypted_store import (
+from coros_mcp.auth.encrypted_store import (
     clear_credential_encrypted,
     get_credential_encrypted,
     store_credential_encrypted,
 )
-from auth.keyring_store import CredentialResult, is_keyring_available
-from auth.keyring_store import clear_credential as _keyring_clear
-from auth.keyring_store import get_credential as _keyring_get
-from auth.keyring_store import store_credential as _keyring_store
+from coros_mcp.auth.keyring_store import CredentialResult, is_keyring_available
+from coros_mcp.auth.keyring_store import clear_credential as _keyring_clear
+from coros_mcp.auth.keyring_store import get_credential as _keyring_get
+from coros_mcp.auth.keyring_store import store_credential as _keyring_store
 
 ENV_VAR = "COROS_ACCESS_TOKEN"
 
