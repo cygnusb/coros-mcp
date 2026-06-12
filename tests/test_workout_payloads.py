@@ -480,6 +480,31 @@ def test_running_repeat_group_substeps_are_main():
     assert all(ex["hrType"] == 2 for ex in sub_steps)
 
 
+def test_running_repeat_group_counts_real_steps_only():
+    """exerciseNum / totalSets count real steps, not the structural group
+    container. [warmup, repeat(3× [hard, easy]), cooldown] has 4 real steps
+    (warmup, hard, easy, cooldown) even though `exercises` holds 5 rows."""
+    payload = _build_workout_program_payload(
+        name="intervals",
+        steps=[
+            {"name": "Warm", "duration_minutes": 10, "intensity_low": 120, "intensity_high": 140},
+            {"repeat": 3, "steps": [
+                {"name": "Hard", "duration_minutes": 3, "intensity_low": 165, "intensity_high": 175},
+                {"name": "Easy", "duration_minutes": 2, "intensity_low": 120, "intensity_high": 140},
+            ]},
+            {"name": "Cool", "duration_minutes": 10, "intensity_low": 120, "intensity_high": 140},
+        ],
+        sport_type=100,
+        intensity_type=2,
+    )
+    # 5 rows in `exercises` (one is the isGroup container)...
+    assert len(payload["exercises"]) == 5
+    assert sum(e.get("isGroup", False) for e in payload["exercises"]) == 1
+    # ...but only 4 are real exercise steps.
+    assert payload["exerciseNum"] == 4
+    assert payload["totalSets"] == 4
+
+
 def test_running_repeat_group_only_all_main():
     """[repeat(3× [hard, easy])] with no surrounding plain steps: both
     sub-steps are main (2) — never warmup/cooldown."""

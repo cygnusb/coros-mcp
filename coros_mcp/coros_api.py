@@ -623,6 +623,11 @@ async def fetch_activity_detail(auth: StoredAuth, activity_id: str, sport_type: 
 # 100 (and 102 Trail, 103 Track). _build_workout_program_payload maps the
 # activity-side run IDs → 1 on the way out. The old 100: "Running" entry here
 # never round-tripped, because the API only ever speaks sportType=1 for runs.
+# Keyed by WORKOUT-namespace (wire) sport IDs — the sportType the workout API
+# stores and returns, not the activity-namespace IDs callers pass in. All run
+# flavors (activity 100/102/103) are collapsed to wire 1 on write, so a run
+# fetched back always reads as wire 1 here. Only consult this with wire IDs;
+# map activity IDs through _RUNNING_ACTIVITY_SPORT_TYPES first.
 WORKOUT_SPORT_NAMES: dict[int, str] = {
     1: "Running",
     2: "Indoor Cycling",
@@ -647,6 +652,8 @@ def _parse_workout(item: dict) -> dict:
             "intensity_high": ex.get("intensityValueExtend"),
             "sets": ex.get("sets", 1),
         })
+    # sportType from the workout API is always a wire ID (runs come back as 1,
+    # never 100/102/103), so the wire-keyed lookup below is correct here.
     sport = item.get("sportType")
     return {
         "id": str(item.get("id", "")),
@@ -887,6 +894,12 @@ def _build_workout_program_payload(
         for ex in exercises:
             if ex.get("isGroup"):
                 continue
+            # Repeat sub-steps (groupId != "0") are always main work. Set it
+            # explicitly here so running classification owns it, rather than
+            # silently inheriting the exerciseType=2 the construction path
+            # happens to write — a cycling-path refactor must not break this.
+            if ex.get("groupId", "0") != "0":
+                ex["exerciseType"] = 2
             ex.setdefault("exerciseKind", 0)
             ex.setdefault("gradeSystem", 0)
             ex["hrType"] = 2 if intensity_type == 2 else 0
@@ -899,9 +912,14 @@ def _build_workout_program_payload(
             ex.setdefault("sourceId", "0")
             ex.setdefault("subType", 0)
             ex.setdefault("targetDisplayUnit", 0)
+        # exerciseNum / totalSets count real exercise steps only. A repeat
+        # group adds a structural container row (isGroup=True) to `exercises`
+        # that is glue, not a step — counting it inflates these by one per
+        # group. Flat workouts have no containers, so this matches len() there.
+        real_step_count = sum(1 for e in exercises if not e.get("isGroup"))
         payload.update({
             "duration": total_seconds,
-            "exerciseNum": len(exercises),
+            "exerciseNum": real_step_count,
             "gradeSystemVersion": 0,
             "hybridTotalSets": 0,
             "overview": "",
@@ -917,7 +935,7 @@ def _build_workout_program_payload(
             "sourceUrl": "",
             # subType=65535 marks a structured workout (shared with strength).
             "subType": 65535,
-            "totalSets": len(exercises),
+            "totalSets": real_step_count,
             "trainingLoad": 0,
             "type": 0,
             "videoCoverUrl": "",
