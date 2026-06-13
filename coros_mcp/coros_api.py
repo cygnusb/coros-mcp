@@ -7,6 +7,7 @@ Sleep phase data comes from the mobile API (/coros/data/statistic/daily on apieu
 """
 
 import asyncio
+import contextlib
 import hashlib
 import json
 import logging
@@ -49,7 +50,9 @@ ENDPOINTS = {
     "activity_detail": "/activity/detail/query",
     "sport_types": "/activity/fit/getImportSportList",
     "workout_list": "/training/program/query",  # POST — list/fetch workout programs
+    "plan_list": "/training/plan/query",         # POST — list training plans
     "workout_add": "/training/program/add",     # POST — create new structured workout
+    "workout_calculate": "/training/program/calculate",  # POST — recalc distance/time/load/chart
     "workout_delete": "/training/program/delete",  # POST — delete workout(s), body: ["id1", ...]
     "schedule_sum": "/training/schedule/querysum",  # GET — planned calendar aggregates
     "schedule": "/training/schedule/query",         # GET — planned calendar detail
@@ -663,6 +666,61 @@ async def fetch_workout_templates(auth: StoredAuth) -> list[dict]:
     return [_parse_workout(w) for w in body.get("data", [])]
 
 
+def _parse_training_plan(item: dict) -> dict:
+    programs = item.get("programs", [])
+    entities = item.get("entities", [])
+    return {
+        "id": str(item.get("id", "")),
+        "name": item.get("name"),
+        "overview": item.get("overview"),
+        "status": item.get("status"),
+        "execute_status": item.get("executeStatus"),
+        "start_day": item.get("startDay"),
+        "end_day": item.get("endDay"),
+        "total_day": item.get("totalDay"),
+        "min_weeks": item.get("minWeeks"),
+        "max_weeks": item.get("maxWeeks"),
+        "program_count": len(programs),
+        "entity_count": len(entities),
+    }
+
+
+async def _fetch_training_plans_data(
+    auth: StoredAuth, status_list: list[int] | None = None
+) -> list[dict]:
+    """Shared POST for /training/plan/query. Returns the raw plan list."""
+    payload = {"statusList": status_list or [1, 2]}
+    params = {"teamId": "", "userId": ""}
+    async with httpx.AsyncClient(timeout=30) as client:
+        resp = await client.post(
+            _base_url(auth.region) + ENDPOINTS["plan_list"],
+            params=params,
+            json=payload,
+            headers=_auth_headers(auth),
+        )
+        resp.raise_for_status()
+        body = resp.json()
+
+    _check_response(body, "training plan list")
+    return body.get("data", [])
+
+
+async def fetch_training_plans(
+    auth: StoredAuth,
+    status_list: list[int] | None = None,
+) -> list[dict]:
+    """List user training plans (summarized). Defaults to statusList [1, 2]."""
+    return [_parse_training_plan(p) for p in await _fetch_training_plans_data(auth, status_list)]
+
+
+async def fetch_training_plans_raw(
+    auth: StoredAuth,
+    status_list: list[int] | None = None,
+) -> list[dict]:
+    """List user training plans without stripping API fields."""
+    return await _fetch_training_plans_data(auth, status_list)
+
+
 def _build_workout_program_payload(
     name: str,
     steps: list[dict],
@@ -863,6 +921,80 @@ async def fetch_schedule(
     async with httpx.AsyncClient(timeout=30) as client:
         data = await _fetch_schedule_data(client, auth, start_day, end_day)
     return _strip_schedule(data)
+
+
+async def fetch_schedule_raw(
+    auth: StoredAuth, start_day: str, end_day: str
+) -> dict:
+    """
+    Fetch planned activities without stripping fields.
+
+    Raw schedule payloads are needed when updating an existing planned workout:
+    /training/schedule/update expects the full entity/program objects, including
+    planId, planProgramId, idInPlan, exerciseBarChart, and version fields.
+    """
+    async with httpx.AsyncClient(timeout=30) as client:
+        return await _fetch_schedule_data(client, auth, start_day, end_day)
+
+
+async def calculate_workout_program(auth: StoredAuth, program: dict) -> dict:
+    """
+    Recalculate a workout program after edits.
+
+    Mirrors the Training Hub /training/program/calculate request captured from
+    the web app. The response updates derived fields such as duration,
+    estimatedDistance, estimatedValue/trainingLoad, and exerciseBarChart.
+    """
+    async with httpx.AsyncClient(timeout=30) as client:
+        resp = await client.post(
+            _base_url(auth.region) + ENDPOINTS["workout_calculate"],
+            json=program,
+            headers=_auth_headers(auth),
+        )
+        resp.raise_for_status()
+        body = resp.json()
+
+    _check_response(body, "workout calculate")
+
+    data = body.get("data")
+    return data if data is not None else body
+
+
+def apply_workout_calculation(program: dict, calculation: dict) -> dict:
+    """
+    Return a copy of program with calculate() derived fields applied.
+
+    The calculate endpoint returns plan* fields rather than the original program
+    field names. Training Hub writes those values back onto the program before
+    sending /training/schedule/update.
+    """
+    updated = dict(program)
+
+    if (value := calculation.get("exerciseBarChart")) is not None:
+        updated["exerciseBarChart"] = value
+
+    if (value := calculation.get("planDuration")) is not None:
+        updated["duration"] = value
+        updated["estimatedTime"] = value
+
+    if (value := calculation.get("planTrainingLoad")) is not None:
+        updated["trainingLoad"] = value
+        updated["estimatedValue"] = value
+
+    if (value := calculation.get("planElevGain")) is not None:
+        updated["elevGain"] = value
+
+    if (value := calculation.get("planDistance")) is not None:
+        updated["distance"] = value
+        with contextlib.suppress(TypeError, ValueError):
+            updated["estimatedDistance"] = int(float(value))
+
+    if (value := calculation.get("planSets")) is not None and "sets" in updated:
+        updated["sets"] = value
+    if (value := calculation.get("planHybridTotalSets")) is not None and "totalSets" in updated:
+        updated["totalSets"] = value
+
+    return updated
 
 
 _EXERCISE_DROP = frozenset({
@@ -1408,6 +1540,83 @@ async def remove_scheduled_workout(
         body = resp.json()
 
     _check_response(body, "schedule delete")
+
+
+async def _post_schedule_update(auth: StoredAuth, payload: dict) -> None:
+    """POST a versioned payload to /training/schedule/update."""
+    async with httpx.AsyncClient(timeout=30) as client:
+        resp = await client.post(
+            _base_url(auth.region) + ENDPOINTS["schedule_update"],
+            json=payload,
+            headers=_auth_headers(auth),
+        )
+        resp.raise_for_status()
+        body = resp.json()
+
+    _check_response(body, "schedule update")
+
+
+async def add_planned_workout(
+    auth: StoredAuth,
+    entity: dict,
+    program: dict,
+    version_object: dict | None = None,
+) -> None:
+    """
+    Add a planned workout to the training calendar from a raw entity/program.
+
+    This mirrors the Training Hub schedule/update payload used when adding an
+    inline workout that is not first fetched from the workout library.
+    """
+    id_in_plan = entity.get("idInPlan") or program.get("idInPlan")
+    if id_in_plan is None:
+        raise ValueError("entity/program must include idInPlan for schedule add")
+
+    program.setdefault("idInPlan", id_in_plan)
+    payload = {
+        "entities": [entity],
+        "programs": [program],
+        "versionObjects": [version_object or {"id": id_in_plan, "status": 1}],
+        "pbVersion": 2,
+    }
+    await _post_schedule_update(auth, payload)
+
+
+async def update_scheduled_workout(
+    auth: StoredAuth,
+    entity: dict,
+    program: dict,
+    version_object: dict | None = None,
+) -> None:
+    """
+    Update an existing planned workout on the training calendar.
+
+    This uses the same /training/schedule/update endpoint as scheduling and
+    deletion, but sends versionObjects.status=2. The entity/program should come
+    from fetch_schedule_raw(), with any intended edits applied. If the program
+    content changes, call calculate_workout_program() first and pass the
+    calculated program here.
+    """
+    id_in_plan = str(entity.get("idInPlan") or program.get("idInPlan") or "")
+    plan_id = str(entity.get("planId") or program.get("planId") or "")
+    plan_program_id = str(entity.get("planProgramId") or program.get("planProgramId") or "")
+    if not id_in_plan or not plan_id:
+        raise ValueError("entity/program must include idInPlan and planId for schedule update")
+
+    payload = {
+        "entities": [entity],
+        "programs": [program],
+        "versionObjects": [
+            version_object or {
+                "id": id_in_plan,
+                "status": 2,
+                "planProgramId": plan_program_id,
+                "planId": plan_id,
+            }
+        ],
+        "pbVersion": 2,
+    }
+    await _post_schedule_update(auth, payload)
 
 
 async def fetch_exercises(auth: StoredAuth, sport_type: int) -> list[dict]:
