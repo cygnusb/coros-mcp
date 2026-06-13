@@ -16,6 +16,11 @@ build/
 .ruff_cache/
 .pytest_cache/
 
+# Coverage
+.coverage
+coverage.xml
+htmlcov/
+
 # OS files
 .DS_Store
 Thumbs.db
