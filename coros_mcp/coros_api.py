@@ -310,26 +310,48 @@ def get_stored_auth() -> StoredAuth | None:
     token (for MCP server use cases where keyring is not accessible in the
     subprocess). Stored user_id, region, and mobile token/payload are kept
     so sleep data still works alongside an env-provided web token.
+
+    Precedence depends on whether refreshable credentials (COROS_EMAIL /
+    COROS_PASSWORD) are also configured:
+
+    - No credentials: the env token is externally managed and assumed always
+      valid, so it always wins.
+    - Credentials present: a *valid* stored token wins over the env token.
+      This lets a token minted by a prior auto-login (after the env token went
+      stale) take effect — otherwise every call would re-pay one failed
+      request plus a re-login because the stale env token was always preferred.
+      The env token is still used as a seed when no valid stored token exists.
     """
-    # Prefer explicit env var token when provided
     access_token = os.environ.get("COROS_ACCESS_TOKEN")
-    if access_token:
+    have_credentials = get_env_credentials() is not None
+
+    def _env_auth() -> StoredAuth:
         stored = _load_auth()
         region = os.environ.get("COROS_REGION") or (stored.region if stored else "eu")
         # Timestamp is set to now so the TTL check always passes — env-var
         # tokens are assumed to be externally managed and always valid.
         return StoredAuth(
-            access_token=access_token,
+            access_token=access_token,  # type: ignore[arg-type]  # guarded by callers
             user_id=stored.user_id if stored else "env",
             region=region,
             timestamp=int(time.time() * 1000),
             mobile_access_token=stored.mobile_access_token if stored else None,
             mobile_login_payload=stored.mobile_login_payload if stored else None,
         )
-    # Fall back to stored auth
+
+    # Externally-managed env token with nothing to self-refresh from → trust it.
+    if access_token and not have_credentials:
+        return _env_auth()
+
+    # Prefer a valid stored token (e.g. one minted by a prior auto-login).
     auth = _load_auth()
     if auth and _is_token_valid(auth):
         return auth
+
+    # Credentials present but no valid stored token yet: fall back to the env
+    # token as a seed if one was provided, otherwise signal "needs login".
+    if access_token:
+        return _env_auth()
     return None
 
 
@@ -1718,7 +1740,8 @@ async def add_planned_workout(
     if id_in_plan is None:
         raise ValueError("entity/program must include idInPlan for schedule add")
 
-    program.setdefault("idInPlan", id_in_plan)
+    # Copy rather than mutate the caller's program dict.
+    program = {**program, "idInPlan": program.get("idInPlan", id_in_plan)}
     payload = {
         "entities": [entity],
         "programs": [program],
