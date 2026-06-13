@@ -46,7 +46,9 @@ def _init_local_tz() -> timezone | None:
         return None
     try:
         return _parse_tz_offset(raw)
-    except ValueError:
+    except (ValueError, OverflowError):
+        # ValueError: non-numeric / NaN / out-of-range offset.
+        # OverflowError: infinite ("inf") or oversized ("1e308") float hours.
         logger.warning(
             "Invalid COROS_TIMEZONE=%r; falling back to system local timezone.", raw
         )

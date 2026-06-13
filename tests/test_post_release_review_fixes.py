@@ -191,9 +191,18 @@ class TestLocalTzInit:
     directly (no module reload) so a malformed COROS_TIMEZONE is proven not to
     raise — at import time a raise would crash the whole MCP server."""
 
-    def test_malformed_timezone_falls_back_without_raising(self, monkeypatch):
+    # Each value exercises a different failure mode of _parse_tz_offset:
+    #   "not-a-tz" / "" -> float() ValueError
+    #   "nan"           -> timedelta(NaN) ValueError
+    #   "25"            -> timezone() out-of-range ValueError
+    #   "inf" / "-inf"  -> timedelta(inf) OverflowError
+    #   "1e308"         -> timedelta(huge) OverflowError
+    @pytest.mark.parametrize(
+        "value", ["not-a-tz", "", "nan", "25", "inf", "-inf", "1e308"]
+    )
+    def test_malformed_timezone_falls_back_without_raising(self, monkeypatch, value):
         from coros_mcp.cache import utils
-        monkeypatch.setenv("COROS_TIMEZONE", "not-a-tz")
+        monkeypatch.setenv("COROS_TIMEZONE", value)
         assert utils._init_local_tz() is None
 
     def test_valid_timezone_parsed(self, monkeypatch):
