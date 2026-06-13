@@ -619,13 +619,38 @@ async def fetch_activity_detail(auth: StoredAuth, activity_id: str, sport_type: 
 # targetType=2 = time-based (seconds); exerciseType=2 = cycling block
 # IntensityType values: 1=weight, 2=HR, 3=pace, 4=speed, 5=none, 6=power, 7=cadence
 
+# Note: the workout API uses sportType=1 for Running; the activity API uses
+# 100 (and 102 Trail, 103 Track). _build_workout_program_payload maps the
+# activity-side run IDs → 1 on the way out. The old 100: "Running" entry here
+# never round-tripped, because the API only ever speaks sportType=1 for runs.
+# Keyed by WORKOUT-namespace (wire) sport IDs — the sportType the workout API
+# stores and returns, not the activity-namespace IDs callers pass in. All run
+# flavors (activity 100/102/103) are collapsed to wire 1 on write, so a run
+# fetched back always reads as wire 1 here. Only consult this with wire IDs;
+# map activity IDs through _RUNNING_ACTIVITY_SPORT_TYPES first.
 WORKOUT_SPORT_NAMES: dict[int, str] = {
+    1: "Running",
     2: "Indoor Cycling",
     4: "Strength",
-    100: "Running",
     200: "Road Bike",
     201: "Indoor Cycling (alt)",
 }
+
+# Activity-namespace sport IDs that are run flavors. The workout API has no
+# separate trail/track/treadmill workout type — they all collapse to the
+# single Running wire ID (sportType=1) and carry the same metadata block.
+_RUNNING_ACTIVITY_SPORT_TYPES = frozenset({100, 102, 103})
+
+# Cycling sport IDs that pass through to the wire unchanged (no namespace
+# remap, no running metadata block): 2 Indoor Cycling, 200 Road Bike,
+# 201 Indoor Cycling (alt).
+_CYCLING_SPORT_TYPES = frozenset({2, 200, 201})
+
+# Every sport_type _build_workout_program_payload accepts. Anything else is
+# rejected rather than emitted as-is: an unknown ID would otherwise produce a
+# cycling-shaped payload with a bogus wire sportType that fails silently on
+# the COROS side. (Strength uses a separate builder and is not listed here.)
+_KNOWN_SPORT_TYPES = _RUNNING_ACTIVITY_SPORT_TYPES | _CYCLING_SPORT_TYPES
 
 
 def _parse_workout(item: dict) -> dict:
@@ -638,6 +663,8 @@ def _parse_workout(item: dict) -> dict:
             "intensity_high": ex.get("intensityValueExtend"),
             "sets": ex.get("sets", 1),
         })
+    # sportType from the workout API is always a wire ID (runs come back as 1,
+    # never 100/102/103), so the wire-keyed lookup below is correct here.
     sport = item.get("sportType")
     return {
         "id": str(item.get("id", "")),
@@ -725,12 +752,29 @@ def _build_workout_program_payload(
     name: str,
     steps: list[dict],
     sport_type: int = 2,
-    intensity_type: int = 6,
+    intensity_type: int | None = None,
 ) -> dict:
-    """Sync builder for the cycling/intervals program dict.
+    """Sync builder for the cycling/intervals/running program dict.
 
     steps: list of dicts — either plain steps or repeat groups (see
     save_workout_template docstring).
+
+    sport_type uses the activity namespace (the IDs list_activities
+    returns), not the workout-API wire IDs:
+
+      - 2   = Indoor Cycling (default)
+      - 200 = Road Bike, 201 = Indoor Cycling (alt)
+      - 100 = Running, 102 = Trail Running, 103 = Track Running
+        (all mapped to the workout-side wire ID sportType=1 and given the
+        metadata block COROS requires for runs)
+
+    Passing the wire ID 1 directly is rejected — callers must use the
+    activity-side run IDs so the running metadata block is always applied.
+    Cycling (the default) is unchanged.
+
+    intensity_type=None resolves per sport: runs default to HR (2), the
+    natural running target; cycling/everything else defaults to power (6).
+    Pass an explicit value to override.
     """
     if not steps:
         raise ValueError("workout requires at least one step")
@@ -738,6 +782,30 @@ def _build_workout_program_payload(
     top_index = 0  # counts top-level positions for sortNo
     total_seconds = 0
     ex_id = 0  # sequential exercise IDs (API uses these to link groups)
+
+    # Workout API uses a single Running wire ID (sportType=1); the activity
+    # API splits runs into 100 (Running), 102 (Trail), 103 (Track). Accept
+    # the activity-side IDs (what list_activities returns) and map them onto
+    # the wire ID. Reject the wire ID itself so a caller can't slip past the
+    # running metadata block and reproduce the app-crash / strength-render bug.
+    if sport_type == 1:
+        raise ValueError(
+            "Pass sport_type=100 for running (activity-namespace ID); 1 is the "
+            "internal workout-API ID and must not be passed directly."
+        )
+    if sport_type not in _KNOWN_SPORT_TYPES:
+        raise ValueError(
+            f"Unknown sport_type={sport_type}. Supported: "
+            "100/102/103 (Running/Trail/Track), 2 (Indoor Cycling), "
+            "200 (Road Bike), 201 (Indoor Cycling alt)."
+        )
+    is_running = sport_type in _RUNNING_ACTIVITY_SPORT_TYPES
+    wire_sport_type = 1 if is_running else sport_type
+
+    # Resolve the per-sport default intensity: runs default to HR (2), the
+    # natural running target; cycling keeps power (6). An explicit value wins.
+    if intensity_type is None:
+        intensity_type = 2 if is_running else 6
 
     for step in steps:
         if "repeat" in step:
@@ -757,7 +825,7 @@ def _build_workout_program_payload(
                 "id": group_id,
                 "name": "Group",
                 "exerciseType": 0,
-                "sportType": sport_type,
+                "sportType": wire_sport_type,
                 "intensityType": 0,
                 "intensityValue": 0,
                 "targetType": 2,
@@ -778,7 +846,7 @@ def _build_workout_program_payload(
                     "id": ex_id,
                     "name": sub["name"],
                     "exerciseType": 2,
-                    "sportType": sport_type,
+                    "sportType": wire_sport_type,
                     "intensityType": intensity_type,
                     "intensityValue": sub.get("intensity_low", sub.get("power_low_w", 0)),
                     "intensityValueExtend": sub.get("intensity_high", sub.get("power_high_w", 0)),
@@ -802,7 +870,7 @@ def _build_workout_program_payload(
                 "id": ex_id,
                 "name": step["name"],
                 "exerciseType": 2,
-                "sportType": sport_type,
+                "sportType": wire_sport_type,
                 "intensityType": intensity_type,
                 "intensityValue": step.get("intensity_low", step.get("power_low_w", 0)),
                 "intensityValueExtend": step.get("intensity_high", step.get("power_high_w", 0)),
@@ -817,13 +885,91 @@ def _build_workout_program_payload(
                 "originId": "0",
             })
 
-    return {
+    payload = {
         "name": name,
-        "sportType": sport_type,
+        "sportType": wire_sport_type,
         "estimatedTime": total_seconds,
         "access": 1,
         "exercises": exercises,
     }
+
+    # Running programs need the same metadata block strength programs
+    # carry. Without it the COROS app fails to parse the entry or renders
+    # it as strength on the watch.
+    if is_running:
+        # exerciseType markers (1=warmup, 3=cooldown) attach to the FIRST and
+        # LAST top-level steps, and only when those steps are plain. A repeat
+        # group is structural (never warmup/cooldown) and its sub-steps are
+        # always main work. Gating on the first/last top-level *items* — not on
+        # a count of plain steps — keeps the markers correct for shapes that mix
+        # a single plain step with a group: "[warmup, intervals]" still tags the
+        # warmup, "[intervals, cooldown]" still tags the cooldown. Everything
+        # else (interior plain steps, single-step workouts) stays main (the
+        # exerciseType=2 written at construction).
+        top_level_plain = [
+            e for e in exercises
+            if not e.get("isGroup") and e.get("groupId", "0") == "0"
+        ]
+        if len(steps) > 1 and top_level_plain:
+            if "repeat" not in steps[0]:
+                top_level_plain[0]["exerciseType"] = 1   # warmup
+            if "repeat" not in steps[-1]:
+                top_level_plain[-1]["exerciseType"] = 3  # cooldown
+        # Per-step run metadata applies to every non-group step — top-level
+        # plain steps AND repeat sub-steps — so interval blocks render too.
+        # The group container carries none. hrType=2 marks HR-based targets.
+        for ex in exercises:
+            if ex.get("isGroup"):
+                continue
+            # Repeat sub-steps (groupId != "0") are always main work. Set it
+            # explicitly here so running classification owns it, rather than
+            # silently inheriting the exerciseType=2 the construction path
+            # happens to write — a cycling-path refactor must not break this.
+            if ex.get("groupId", "0") != "0":
+                ex["exerciseType"] = 2
+            ex.setdefault("exerciseKind", 0)
+            ex.setdefault("gradeSystem", 0)
+            ex["hrType"] = 2 if intensity_type == 2 else 0
+            ex.setdefault("intensityMultiplier", 0)
+            ex.setdefault("intensityPercent", 0)
+            ex.setdefault("intensityPercentExtend", 0)
+            ex.setdefault("onsightGradeOffset", 0)
+            ex.setdefault("overview", "")
+            ex.setdefault("packageTime", 0)
+            ex.setdefault("sourceId", "0")
+            ex.setdefault("subType", 0)
+            ex.setdefault("targetDisplayUnit", 0)
+        # exerciseNum / totalSets count real exercise steps only. A repeat
+        # group adds a structural container row (isGroup=True) to `exercises`
+        # that is glue, not a step — counting it inflates these by one per
+        # group. Flat workouts have no containers, so this matches len() there.
+        real_step_count = sum(1 for e in exercises if not e.get("isGroup"))
+        payload.update({
+            "duration": total_seconds,
+            "exerciseNum": real_step_count,
+            "gradeSystemVersion": 0,
+            "hybridTotalSets": 0,
+            "overview": "",
+            "poolLength": 0,
+            "poolLengthId": 0,
+            "poolLengthUnit": 0,
+            "referExercise": {
+                "gradeSystem": 0,
+                "hrType": 3 if intensity_type == 2 else 0,
+                "intensityType": 0,
+                "valueType": 1,
+            },
+            "sourceUrl": "",
+            # subType=65535 marks a structured workout (shared with strength).
+            "subType": 65535,
+            "totalSets": real_step_count,
+            "trainingLoad": 0,
+            "type": 0,
+            "videoCoverUrl": "",
+            "videoUrl": "",
+        })
+
+    return payload
 
 
 async def save_workout_template(
@@ -831,7 +977,7 @@ async def save_workout_template(
     name: str,
     steps: list[dict],
     sport_type: int = 2,
-    intensity_type: int = 6,
+    intensity_type: int | None = None,
 ) -> str:
     """
     Save a reusable cycling/intervals workout template to the Coros library.
@@ -1470,7 +1616,7 @@ async def schedule_workout(
     steps: list[dict],
     happen_day: str,
     sport_type: int = 2,
-    intensity_type: int = 6,
+    intensity_type: int | None = None,
     sort_no: int = 1,
 ) -> dict:
     """
