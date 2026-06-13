@@ -752,7 +752,7 @@ def _build_workout_program_payload(
     name: str,
     steps: list[dict],
     sport_type: int = 2,
-    intensity_type: int = 6,
+    intensity_type: int | None = None,
 ) -> dict:
     """Sync builder for the cycling/intervals/running program dict.
 
@@ -771,6 +771,10 @@ def _build_workout_program_payload(
     Passing the wire ID 1 directly is rejected — callers must use the
     activity-side run IDs so the running metadata block is always applied.
     Cycling (the default) is unchanged.
+
+    intensity_type=None resolves per sport: runs default to HR (2), the
+    natural running target; cycling/everything else defaults to power (6).
+    Pass an explicit value to override.
     """
     if not steps:
         raise ValueError("workout requires at least one step")
@@ -797,6 +801,11 @@ def _build_workout_program_payload(
         )
     is_running = sport_type in _RUNNING_ACTIVITY_SPORT_TYPES
     wire_sport_type = 1 if is_running else sport_type
+
+    # Resolve the per-sport default intensity: runs default to HR (2), the
+    # natural running target; cycling keeps power (6). An explicit value wins.
+    if intensity_type is None:
+        intensity_type = 2 if is_running else 6
 
     for step in steps:
         if "repeat" in step:
@@ -888,23 +897,24 @@ def _build_workout_program_payload(
     # carry. Without it the COROS app fails to parse the entry or renders
     # it as strength on the watch.
     if is_running:
-        # exerciseType markers (1=warmup, 3=cooldown) apply ONLY to top-level
-        # plain steps. A repeat group's sub-steps (groupId != "0") are always
-        # main work, and the group container (isGroup) is structural — neither
-        # is ever warmup/cooldown. Picking by position over *all* non-group
-        # rows would mislabel the first/last sub-step of an interval block.
+        # exerciseType markers (1=warmup, 3=cooldown) attach to the FIRST and
+        # LAST top-level steps, and only when those steps are plain. A repeat
+        # group is structural (never warmup/cooldown) and its sub-steps are
+        # always main work. Gating on the first/last top-level *items* — not on
+        # a count of plain steps — keeps the markers correct for shapes that mix
+        # a single plain step with a group: "[warmup, intervals]" still tags the
+        # warmup, "[intervals, cooldown]" still tags the cooldown. Everything
+        # else (interior plain steps, single-step workouts) stays main (the
+        # exerciseType=2 written at construction).
         top_level_plain = [
             e for e in exercises
             if not e.get("isGroup") and e.get("groupId", "0") == "0"
         ]
-        last_idx = len(top_level_plain) - 1
-        for i, ex in enumerate(top_level_plain):
-            if last_idx > 0 and i == 0:
-                ex["exerciseType"] = 1   # warmup
-            elif last_idx > 0 and i == last_idx:
-                ex["exerciseType"] = 3   # cooldown
-            else:
-                ex["exerciseType"] = 2   # main / single-step
+        if len(steps) > 1 and top_level_plain:
+            if "repeat" not in steps[0]:
+                top_level_plain[0]["exerciseType"] = 1   # warmup
+            if "repeat" not in steps[-1]:
+                top_level_plain[-1]["exerciseType"] = 3  # cooldown
         # Per-step run metadata applies to every non-group step — top-level
         # plain steps AND repeat sub-steps — so interval blocks render too.
         # The group container carries none. hrType=2 marks HR-based targets.
@@ -967,7 +977,7 @@ async def save_workout_template(
     name: str,
     steps: list[dict],
     sport_type: int = 2,
-    intensity_type: int = 6,
+    intensity_type: int | None = None,
 ) -> str:
     """
     Save a reusable cycling/intervals workout template to the Coros library.
@@ -1606,7 +1616,7 @@ async def schedule_workout(
     steps: list[dict],
     happen_day: str,
     sport_type: int = 2,
-    intensity_type: int = 6,
+    intensity_type: int | None = None,
     sort_no: int = 1,
 ) -> dict:
     """

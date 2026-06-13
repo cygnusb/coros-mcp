@@ -608,6 +608,65 @@ def test_unknown_sport_type_is_rejected():
         )
 
 
+def test_running_warmup_before_group_is_tagged():
+    """[warmup, repeat(...)] (no trailing plain cooldown): the leading plain
+    step is still warmup (1), not main — the marker keys off the first
+    top-level item, not a count of plain steps. Sub-steps stay main (2)."""
+    payload = _build_workout_program_payload(
+        name="warm then intervals",
+        steps=[
+            {"name": "Warm", "duration_minutes": 10, "intensity_low": 120, "intensity_high": 140},
+            {"repeat": 3, "steps": [
+                {"name": "Hard", "duration_minutes": 3, "intensity_low": 165, "intensity_high": 175},
+                {"name": "Easy", "duration_minutes": 2, "intensity_low": 120, "intensity_high": 140},
+            ]},
+        ],
+        sport_type=100,
+        intensity_type=2,
+    )
+    # Order: warmup, group, hard, easy
+    assert [ex["exerciseType"] for ex in payload["exercises"]] == [1, 0, 2, 2]
+
+
+def test_running_group_then_cooldown_is_tagged():
+    """[repeat(...), cooldown] (no leading plain warmup): the trailing plain
+    step is still cooldown (3), not main. Sub-steps stay main (2)."""
+    payload = _build_workout_program_payload(
+        name="intervals then cool",
+        steps=[
+            {"repeat": 3, "steps": [
+                {"name": "Hard", "duration_minutes": 3, "intensity_low": 165, "intensity_high": 175},
+                {"name": "Easy", "duration_minutes": 2, "intensity_low": 120, "intensity_high": 140},
+            ]},
+            {"name": "Cool", "duration_minutes": 10, "intensity_low": 120, "intensity_high": 140},
+        ],
+        sport_type=100,
+        intensity_type=2,
+    )
+    # Order: group, hard, easy, cooldown
+    assert [ex["exerciseType"] for ex in payload["exercises"]] == [0, 2, 2, 3]
+
+
+def test_intensity_type_defaults_per_sport():
+    """When intensity_type is omitted it resolves per sport: runs default to
+    HR (2), cycling to power (6). An explicit value still wins."""
+    run = _build_workout_program_payload(
+        name="r",
+        steps=[{"name": "Run", "duration_minutes": 30, "intensity_low": 120, "intensity_high": 150}],
+        sport_type=100,
+    )
+    assert run["exercises"][0]["intensityType"] == 2
+    assert run["exercises"][0]["hrType"] == 2
+    assert run["referExercise"]["hrType"] == 3
+
+    ride = _build_workout_program_payload(
+        name="c",
+        steps=[{"name": "Ride", "duration_minutes": 30, "intensity_low": 200, "intensity_high": 240}],
+        sport_type=2,
+    )
+    assert ride["exercises"][0]["intensityType"] == 6
+
+
 # ---------------------------------------------------------------------------
 # Strength catalog cache (_load_strength_catalog)
 # ---------------------------------------------------------------------------

@@ -657,7 +657,7 @@ async def save_workout_template(
     name: str,
     steps: list[dict],
     sport_type: int = 2,
-    intensity_type: int = 6,
+    intensity_type: int | None = None,
 ) -> dict:
     """
     Save a REUSABLE cycling/intervals/running workout TEMPLATE to the Coros library.
@@ -716,10 +716,10 @@ async def save_workout_template(
         Running IDs are mapped internally to the workout-API wire ID
         (sportType=1) and given the metadata block COROS requires for runs.
         Do NOT pass 1 directly — it's the internal wire ID and is rejected.
-    intensity_type : int
-        Intensity type ID. Default 6 = power in watts.
+    intensity_type : int, optional
+        Intensity type ID. Defaults per sport when omitted: runs → 2 (HR),
+        cycling → 6 (power in watts).
         Other IntensityType values: 1=weight, 2=HR, 3=pace, 4=speed, 5=none, 6=power, 7=cadence
-        For runs, 2 (HR) is typical.
 
     Returns
     -------
@@ -945,7 +945,7 @@ async def schedule_workout(
     steps: list[dict],
     happen_day: str,
     sport_type: int = 2,
-    intensity_type: int = 6,
+    intensity_type: int | None = None,
     sort_no: int = 1,
 ) -> dict:
     """
@@ -977,8 +977,9 @@ async def schedule_workout(
         100 = Running, 102 = Trail Running, 103 = Track Running — these map
         internally to the workout wire ID (sportType=1) and get the running
         metadata block. Don't pass 1 directly (it's the wire ID and is rejected).
-    intensity_type : int
-        Intensity type ID (default 6 = power in watts; use 2 = HR for runs).
+    intensity_type : int, optional
+        Intensity type ID. Defaults per sport when omitted: runs → 2 (HR),
+        cycling → 6 (power in watts).
     sort_no : int
         Order within the day (default 1).
 
