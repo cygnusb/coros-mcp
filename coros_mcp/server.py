@@ -687,7 +687,7 @@ async def save_workout_template(
         List of workout steps. Each step is either a plain step or a repeat group.
 
         Plain step:
-        - name (str): step label, e.g. "10:00 Einfahren"
+        - name (str): step label, e.g. "10:00 Warm-up"
         - duration_minutes (float): step duration in minutes
         - intensity_low (int): lower intensity target (watts, BPM, etc. depending on intensity_type)
         - intensity_high (int): upper intensity target (0 = open-ended)
@@ -709,8 +709,8 @@ async def save_workout_template(
 
     sport_type : int
         Sport type ID, in the ACTIVITY namespace (the same IDs list_activities
-        returns). Default 2 = Indoor Cycling (Rollen).
-        - Cycling: 2 = Indoor Cycling (Rollen), 200 = Road Bike (outdoor),
+        returns). Default 2 = Indoor Cycling (indoor trainer).
+        - Cycling: 2 = Indoor Cycling (indoor trainer), 200 = Road Bike (outdoor),
           201 = Indoor Cycling (alt)
         - Running: 100 = Running, 102 = Trail Running, 103 = Track Running
         Running IDs are mapped internally to the workout-API wire ID

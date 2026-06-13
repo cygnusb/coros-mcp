@@ -615,7 +615,7 @@ async def fetch_activity_detail(auth: StoredAuth, activity_id: str, sport_type: 
 # Workout programs  (/training/program/query + /training/program/add)
 # ---------------------------------------------------------------------------
 
-# sportType=2 = Indoor Cycling (Rollen); intensityType=6 = power in watts
+# sportType=2 = Indoor Cycling (indoor trainer); intensityType=6 = power in watts
 # targetType=2 = time-based (seconds); exerciseType=2 = cycling block
 # IntensityType values: 1=weight, 2=HR, 3=pace, 4=speed, 5=none, 6=power, 7=cadence
 
@@ -985,7 +985,7 @@ async def save_workout_template(
     steps: list of dicts — either plain steps or repeat groups.
 
     Plain step:
-      - name: str — step label (e.g. "10:00 Einfahren")
+      - name: str — step label (e.g. "10:00 Warm-up")
       - duration_minutes: float — step duration in minutes
       - intensity_low: int — lower intensity target (watts, BPM, etc. per intensity_type)
       - intensity_high: int — upper intensity target (0 = open-ended)
