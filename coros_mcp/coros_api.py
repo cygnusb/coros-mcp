@@ -324,9 +324,9 @@ def get_stored_auth() -> StoredAuth | None:
     """
     access_token = os.environ.get("COROS_ACCESS_TOKEN")
     have_credentials = get_env_credentials() is not None
+    stored = _load_auth()  # loaded once; reused by both the env and stored paths
 
     def _env_auth() -> StoredAuth:
-        stored = _load_auth()
         region = os.environ.get("COROS_REGION") or (stored.region if stored else "eu")
         # Timestamp is set to now so the TTL check always passes — env-var
         # tokens are assumed to be externally managed and always valid.
@@ -344,9 +344,8 @@ def get_stored_auth() -> StoredAuth | None:
         return _env_auth()
 
     # Prefer a valid stored token (e.g. one minted by a prior auto-login).
-    auth = _load_auth()
-    if auth and _is_token_valid(auth):
-        return auth
+    if stored and _is_token_valid(stored):
+        return stored
 
     # Credentials present but no valid stored token yet: fall back to the env
     # token as a seed if one was provided, otherwise signal "needs login".

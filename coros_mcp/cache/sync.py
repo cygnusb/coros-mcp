@@ -55,11 +55,12 @@ def _today() -> str:
 
 
 def _env_int(name: str, default: int) -> int:
-    """Read a non-negative int from the environment, falling back to `default`.
+    """Read an int from the environment, falling back to `default`.
 
-    A malformed value logs a warning and uses the default rather than raising —
-    this runs at import time, so an uncaught ValueError would crash the whole
-    MCP server with an opaque traceback instead of degrading gracefully.
+    A malformed (non-integer) value logs a warning and uses the default rather
+    than raising — this runs at import time, so an uncaught ValueError would
+    crash the whole MCP server with an opaque traceback instead of degrading
+    gracefully. The value itself is not range-checked.
     """
     raw = os.getenv(name)
     if raw is None:
