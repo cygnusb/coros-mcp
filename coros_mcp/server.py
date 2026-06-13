@@ -442,6 +442,9 @@ async def list_activities(
     Returns
     -------
     dict with keys: activities (list), total_count, page
+    total_count is the number of activities in the local cache for the
+    requested range (the source of pagination here), which may differ from
+    the Coros server's own total until a sync has fully backfilled the range.
     Each activity contains: activity_id, name, sport_type, sport_name,
     start_time (local datetime string "YYYY-MM-DD HH:MM:SS", per COROS_TIMEZONE),
     end_time (same format), duration_seconds, distance_meters, avg_hr, max_hr,
@@ -503,9 +506,13 @@ def _compact_activity(data: dict) -> dict:
     Keeps the full ``summary`` (already small) and ``zoneList``, but compacts
     ``lapList`` items by dropping empty-valued keys and per-item fields that are
     constant or irrelevant for analysis. Also drops bulky top-level keys.
-    Deduplicates laps whose compacted item lists are identical — climbing
-    activities emit ``type=2`` and ``type=3`` laps that are item-for-item copies,
-    so dedup is keyed on ``lapItemList`` only (not the lap-level fields).
+
+    Collapses *adjacent* laps whose compacted item lists are identical —
+    climbing activities emit a ``type=2``/``type=3`` pair back-to-back that is
+    an item-for-item copy of the same segment. Dedup is deliberately limited to
+    consecutive laps so genuinely repeated work (e.g. two identical recovery
+    intervals separated by work laps in a HIIT session) is preserved rather
+    than silently merged. Empty item lists never count as duplicates.
 
     Typical reduction: ~125k chars -> ~15-25k chars (80-85%).
     """
@@ -513,7 +520,7 @@ def _compact_activity(data: dict) -> dict:
 
     if "lapList" in out:
         compacted_laps = []
-        seen_item_hashes: set[str] = set()
+        prev_item_hash: str | None = None
         for lap in out["lapList"]:
             new_lap = {k: v for k, v in lap.items() if k != "lapItemList"}
             new_lap["lapItemList"] = [
@@ -522,9 +529,15 @@ def _compact_activity(data: dict) -> dict:
                 for item in lap.get("lapItemList", [])
             ]
             item_hash = json.dumps(new_lap["lapItemList"], sort_keys=True)
-            if item_hash not in seen_item_hashes:
-                seen_item_hashes.add(item_hash)
-                compacted_laps.append(new_lap)
+            # Skip only a back-to-back copy that actually carries data (the
+            # climbing type=2/type=3 artifact). A lap whose items all compacted
+            # away (e.g. ``[{}]``) carries no content to dedup on, so never
+            # collapse those into each other.
+            has_content = any(item for item in new_lap["lapItemList"])
+            if has_content and item_hash == prev_item_hash:
+                continue
+            prev_item_hash = item_hash
+            compacted_laps.append(new_lap)
         out["lapList"] = compacted_laps
 
     return out

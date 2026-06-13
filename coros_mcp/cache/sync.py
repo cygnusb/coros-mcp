@@ -54,12 +54,30 @@ def _today() -> str:
     return datetime.now().strftime("%Y%m%d")
 
 
+def _env_int(name: str, default: int) -> int:
+    """Read an int from the environment, falling back to `default`.
+
+    A malformed (non-integer) value logs a warning and uses the default rather
+    than raising — this runs at import time, so an uncaught ValueError would
+    crash the whole MCP server with an opaque traceback instead of degrading
+    gracefully. The value itself is not range-checked.
+    """
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    try:
+        return int(raw)
+    except ValueError:
+        logger.warning("Invalid %s=%r (not an integer); using default %d", name, raw, default)
+        return default
+
+
 # Data older than this many days is considered stable (immutable).
 # Recent data is always re-fetched to capture same-day activities and
 # delayed watch→phone syncs (HRV, sleep scores can arrive hours later).
 # Override with COROS_STABLE_DAYS env var (e.g. set to 0 to disable re-fetch,
 # or higher if your watch takes longer to sync to the phone).
-STABLE_AFTER_DAYS = int(os.getenv("COROS_STABLE_DAYS", "2"))
+STABLE_AFTER_DAYS = _env_int("COROS_STABLE_DAYS", 2)
 
 # Maximum range per API call. /analyse/dayDetail/query supports up to ~24
 # weeks; 12 weeks leaves comfortable headroom and matches sync_all's chunking.
