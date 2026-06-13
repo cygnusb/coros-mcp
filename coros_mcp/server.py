@@ -17,6 +17,7 @@ server authenticates automatically on the first request and re-authenticates
 transparently whenever the stored token is expired or rejected.
 """
 
+import json
 import time
 from datetime import datetime, timedelta
 
@@ -465,10 +466,68 @@ async def list_activities(
 # Tool: get_activity_detail
 # ---------------------------------------------------------------------------
 
+# Top-level keys that are bulky and rarely useful for analysis.
+_ACTIVITY_DROP_TOP = frozenset({
+    "userInfo", "userProfile", "deviceList", "newMessageCount", "level",
+})
+# Per-lap-item fields that are constant across items or useless for analysis.
+_ACTIVITY_DROP_ITEM = frozenset({
+    "sportType", "speedUnit", "exerciseNameKey", "exerciseType", "exerciseIndex",
+    "routeIndex", "pitchIndex", "programExerciseIndex", "sectionIndex", "setIndex",
+    "stageIndex", "sportStage", "sourceType", "lapTrainIndex", "lapType",
+    "intensityType", "intensityValue", "indexInOriginLap", "locationType",
+    "lapMapMarkIsStartGps", "waterTemperature", "tempc", "showRestMode",
+    "startGpsLat", "startGpsLon", "startGpsTimestamp",
+    "endGpsLat", "endGpsLon", "endGpsTimestamp",
+})
+
+
+def _is_empty_value(value: object) -> bool:
+    """True for the zero/null/empty sentinels we strip from lap items.
+
+    ``False`` is treated as empty too; ``True`` is kept. Note ``False == 0`` and
+    ``0.0 == 0`` in Python, so the ``== 0`` check also covers those.
+    """
+    return value is None or value is False or value == 0 or value == "" or value == []
+
+
+def _compact_activity(data: dict) -> dict:
+    """Strip zero/null/empty fields from activity detail to reduce token count.
+
+    Keeps the full ``summary`` (already small) and ``zoneList``, but compacts
+    ``lapList`` items by dropping empty-valued keys and per-item fields that are
+    constant or irrelevant for analysis. Also drops bulky top-level keys.
+    Deduplicates laps whose compacted item lists are identical — climbing
+    activities emit ``type=2`` and ``type=3`` laps that are item-for-item copies,
+    so dedup is keyed on ``lapItemList`` only (not the lap-level fields).
+
+    Typical reduction: ~125k chars -> ~15-25k chars (80-85%).
+    """
+    out = {k: v for k, v in data.items() if k not in _ACTIVITY_DROP_TOP}
+
+    if "lapList" in out:
+        compacted_laps = []
+        seen_item_hashes: set[str] = set()
+        for lap in out["lapList"]:
+            new_lap = {k: v for k, v in lap.items() if k != "lapItemList"}
+            new_lap["lapItemList"] = [
+                {k: v for k, v in item.items()
+                 if k not in _ACTIVITY_DROP_ITEM and not _is_empty_value(v)}
+                for item in lap.get("lapItemList", [])
+            ]
+            item_hash = json.dumps(new_lap["lapItemList"], sort_keys=True)
+            if item_hash not in seen_item_hashes:
+                seen_item_hashes.add(item_hash)
+                compacted_laps.append(new_lap)
+        out["lapList"] = compacted_laps
+
+    return out
+
+
 @mcp.tool()
 async def get_activity_detail(activity_id: str, sport_type: int = 0) -> dict:
     """
-    Fetch full detail for a single Coros activity.
+    Fetch detail for a single Coros activity.
 
     Parameters
     ----------
@@ -480,14 +539,18 @@ async def get_activity_detail(activity_id: str, sport_type: int = 0) -> dict:
 
     Returns
     -------
-    dict with full activity data including laps, HR zones, power metrics,
-    elevation, and all available sport-specific fields.
+    dict with activity data including laps, HR zones, power metrics, elevation,
+    and all available sport-specific fields. Zero/empty fields are stripped from
+    lap items to keep the response compact (~125k -> ~15-25k chars).
     """
     auth = await _get_auth()
     if auth is None:
         return {"error": _NOT_AUTHENTICATED}
     try:
-        return await _run_with_auth(coros_api.fetch_activity_detail, auth, activity_id, sport_type)
+        data = await _run_with_auth(coros_api.fetch_activity_detail, auth, activity_id, sport_type)
+        if "error" not in data:
+            data = _compact_activity(data)
+        return data
     except Exception as exc:
         return {"error": str(exc)}
 
