@@ -555,6 +555,59 @@ def test_wire_sport_type_id_is_rejected():
         )
 
 
+def test_running_two_step_exercise_types():
+    """Two plain steps: first=warmup(1), second=cooldown(3), no main block.
+    Pins current behaviour — the COROS app accepts this shape on-device."""
+    payload = _build_workout_program_payload(
+        name="r",
+        steps=[
+            {"name": "W", "duration_minutes": 5, "intensity_low": 100, "intensity_high": 130},
+            {"name": "C", "duration_minutes": 5, "intensity_low": 100, "intensity_high": 130},
+        ],
+        sport_type=100,
+        intensity_type=2,
+    )
+    assert [ex["exerciseType"] for ex in payload["exercises"]] == [1, 3]
+
+
+@pytest.mark.parametrize("intensity_type", [3, 4, 5, 7])  # pace, speed, none, cadence
+def test_running_non_hr_intensity_emits_hr_type_zero(intensity_type):
+    """For any non-HR intensity (intensity_type != 2), hrType is 0 on every
+    step and referExercise.hrType is 0 — only HR targeting flips them on."""
+    payload = _build_workout_program_payload(
+        name="r",
+        steps=[{"name": "Run", "duration_minutes": 30, "intensity_low": 0, "intensity_high": 0}],
+        sport_type=100,
+        intensity_type=intensity_type,
+    )
+    assert all(ex["hrType"] == 0 for ex in payload["exercises"])
+    assert payload["referExercise"]["hrType"] == 0
+
+
+def test_road_bike_not_treated_as_running():
+    """sport_type=200 (Road Bike) takes the cycling path: wire sportType is
+    passed through unchanged and the running metadata block is absent."""
+    payload = _build_workout_program_payload(
+        name="c",
+        steps=[{"name": "ride", "duration_minutes": 60, "intensity_low": 200, "intensity_high": 250}],
+        sport_type=200,
+    )
+    assert payload["sportType"] == 200
+    assert "subType" not in payload
+    assert "referExercise" not in payload
+
+
+def test_unknown_sport_type_is_rejected():
+    """An unknown sport_type is rejected rather than emitted as a bogus wire
+    ID that would fail silently on the COROS side."""
+    with pytest.raises(ValueError, match="Unknown sport_type=50"):
+        _build_workout_program_payload(
+            name="x",
+            steps=[{"name": "step", "duration_minutes": 30, "intensity_low": 0, "intensity_high": 0}],
+            sport_type=50,
+        )
+
+
 # ---------------------------------------------------------------------------
 # Strength catalog cache (_load_strength_catalog)
 # ---------------------------------------------------------------------------

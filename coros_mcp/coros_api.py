@@ -641,6 +641,17 @@ WORKOUT_SPORT_NAMES: dict[int, str] = {
 # single Running wire ID (sportType=1) and carry the same metadata block.
 _RUNNING_ACTIVITY_SPORT_TYPES = frozenset({100, 102, 103})
 
+# Cycling sport IDs that pass through to the wire unchanged (no namespace
+# remap, no running metadata block): 2 Indoor Cycling, 200 Road Bike,
+# 201 Indoor Cycling (alt).
+_CYCLING_SPORT_TYPES = frozenset({2, 200, 201})
+
+# Every sport_type _build_workout_program_payload accepts. Anything else is
+# rejected rather than emitted as-is: an unknown ID would otherwise produce a
+# cycling-shaped payload with a bogus wire sportType that fails silently on
+# the COROS side. (Strength uses a separate builder and is not listed here.)
+_KNOWN_SPORT_TYPES = _RUNNING_ACTIVITY_SPORT_TYPES | _CYCLING_SPORT_TYPES
+
 
 def _parse_workout(item: dict) -> dict:
     exercises = []
@@ -777,6 +788,12 @@ def _build_workout_program_payload(
         raise ValueError(
             "Pass sport_type=100 for running (activity-namespace ID); 1 is the "
             "internal workout-API ID and must not be passed directly."
+        )
+    if sport_type not in _KNOWN_SPORT_TYPES:
+        raise ValueError(
+            f"Unknown sport_type={sport_type}. Supported: "
+            "100/102/103 (Running/Trail/Track), 2 (Indoor Cycling), "
+            "200 (Road Bike), 201 (Indoor Cycling alt)."
         )
     is_running = sport_type in _RUNNING_ACTIVITY_SPORT_TYPES
     wire_sport_type = 1 if is_running else sport_type
