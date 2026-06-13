@@ -1,8 +1,11 @@
 """Shared utilities for the cache package."""
 
+import logging
 import os
 import re
 from datetime import datetime, timedelta, timezone
+
+logger = logging.getLogger(__name__)
 
 
 def _parse_tz_offset(value: str) -> timezone:
@@ -30,8 +33,27 @@ def _parse_tz_offset(value: str) -> timezone:
 # Local timezone for display formatting.
 # Set COROS_TIMEZONE to your UTC offset in hours (e.g. "8", "-5", "5.5", "+05:30").
 # Defaults to the system local timezone when unset.
-_tz_offset = os.getenv("COROS_TIMEZONE")
-LOCAL_TZ: timezone | None = _parse_tz_offset(_tz_offset) if _tz_offset is not None else None
+def _init_local_tz() -> timezone | None:
+    """Resolve LOCAL_TZ from COROS_TIMEZONE, tolerating a malformed value.
+
+    Runs at import time, so a bad value must not raise — that would crash the
+    whole MCP server with an opaque traceback. A malformed offset logs a
+    warning and falls back to the system local timezone (None), matching the
+    "unset" behavior.
+    """
+    raw = os.getenv("COROS_TIMEZONE")
+    if raw is None:
+        return None
+    try:
+        return _parse_tz_offset(raw)
+    except ValueError:
+        logger.warning(
+            "Invalid COROS_TIMEZONE=%r; falling back to system local timezone.", raw
+        )
+        return None
+
+
+LOCAL_TZ: timezone | None = _init_local_tz()
 
 
 def fmt_local_time(unix_secs: str | None) -> str | None:

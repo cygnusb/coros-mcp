@@ -6,6 +6,7 @@ Covers:
   3. get_stored_auth: env-token precedence vs. refreshable credentials
   4. _env_int: malformed env value falls back instead of crashing at import
   5. add_planned_workout: does not mutate the caller's program dict
+  6. _init_local_tz: malformed COROS_TIMEZONE falls back instead of crashing
 """
 
 import asyncio
@@ -179,3 +180,30 @@ async def test_add_planned_workout_does_not_mutate_program(monkeypatch):
     assert "idInPlan" not in program
     # ...while the sent payload carries the resolved idInPlan.
     assert captured["payload"]["programs"][0]["idInPlan"] == 7
+
+
+# ---------------------------------------------------------------------------
+# 6. LOCAL_TZ robustness against a malformed COROS_TIMEZONE
+# ---------------------------------------------------------------------------
+
+class TestLocalTzInit:
+    """_init_local_tz() drives the module-level LOCAL_TZ at import. Exercise it
+    directly (no module reload) so a malformed COROS_TIMEZONE is proven not to
+    raise — at import time a raise would crash the whole MCP server."""
+
+    def test_malformed_timezone_falls_back_without_raising(self, monkeypatch):
+        from coros_mcp.cache import utils
+        monkeypatch.setenv("COROS_TIMEZONE", "not-a-tz")
+        assert utils._init_local_tz() is None
+
+    def test_valid_timezone_parsed(self, monkeypatch):
+        from datetime import timedelta, timezone
+
+        from coros_mcp.cache import utils
+        monkeypatch.setenv("COROS_TIMEZONE", "+05:30")
+        assert utils._init_local_tz() == timezone(timedelta(hours=5, minutes=30))
+
+    def test_unset_timezone_is_none(self, monkeypatch):
+        from coros_mcp.cache import utils
+        monkeypatch.delenv("COROS_TIMEZONE", raising=False)
+        assert utils._init_local_tz() is None
