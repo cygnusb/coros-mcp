@@ -86,6 +86,80 @@ class TestParseActivityZeroValues:
         assert a.elevation_gain is None
 
 
+class TestApplyWorkoutCalculation:
+    """Schedule update flow: calculate() fields are mapped back to program fields."""
+
+    def test_calculation_updates_program_copy(self):
+        from coros_mcp.coros_api import apply_workout_calculation
+
+        program = {
+            "duration": 100,
+            "estimatedTime": 100,
+            "estimatedValue": 10,
+            "trainingLoad": 10,
+            "distance": "1000.00",
+            "estimatedDistance": 1000,
+            "elevGain": 1,
+            "sets": 1,
+            "totalSets": 1,
+            "exerciseBarChart": [],
+        }
+        calculation = {
+            "planDuration": 200,
+            "planTrainingLoad": 30,
+            "planDistance": "2500.00",
+            "planElevGain": 5,
+            "planSets": 2,
+            "planHybridTotalSets": 3,
+            "exerciseBarChart": [{"exerciseId": "1"}],
+        }
+
+        updated = apply_workout_calculation(program, calculation)
+
+        assert updated is not program
+        assert updated["duration"] == 200
+        assert updated["estimatedTime"] == 200
+        assert updated["trainingLoad"] == 30
+        assert updated["estimatedValue"] == 30
+        assert updated["distance"] == "2500.00"
+        assert updated["estimatedDistance"] == 2500
+        assert updated["elevGain"] == 5
+        assert updated["sets"] == 2
+        assert updated["totalSets"] == 3
+        assert updated["exerciseBarChart"] == [{"exerciseId": "1"}]
+        assert program["duration"] == 100
+
+    def test_missing_calculation_fields_leave_program_untouched(self):
+        from coros_mcp.coros_api import apply_workout_calculation
+
+        program = {"duration": 100, "sets": 1}
+        updated = apply_workout_calculation(program, {})
+        assert updated == program
+        assert updated is not program
+
+    def test_sets_only_applied_when_present_in_program(self):
+        from coros_mcp.coros_api import apply_workout_calculation
+
+        # planSets/planHybridTotalSets are ignored when the program has no such keys.
+        updated = apply_workout_calculation(
+            {"duration": 100},
+            {"planSets": 2, "planHybridTotalSets": 3},
+        )
+        assert "sets" not in updated
+        assert "totalSets" not in updated
+
+    def test_invalid_distance_skips_estimated_distance(self):
+        from coros_mcp.coros_api import apply_workout_calculation
+
+        updated = apply_workout_calculation(
+            {"estimatedDistance": 1000},
+            {"planDistance": "not-a-number"},
+        )
+        # distance string is still applied; estimatedDistance is left untouched.
+        assert updated["distance"] == "not-a-number"
+        assert updated["estimatedDistance"] == 1000
+
+
 # ---------------------------------------------------------------------------
 # 2. Bridge warning — logged when fetch range is extended for contiguity
 # ---------------------------------------------------------------------------
