@@ -5,6 +5,14 @@
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 [![Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff)
 
+> [!IMPORTANT]
+> **This is an unofficial, community-built project and is not affiliated with or endorsed by COROS.**
+>
+> COROS has since launched their **official MCP server**: [coroslab/COROS-MCP](https://github.com/coroslab/COROS-MCP).
+> If you are looking for an officially supported integration, please use that instead.
+>
+> This project continues to exist as a community alternative and may offer different or complementary features.
+
 A [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) server that fetches sleep, HRV, and training data from the unofficial Coros API and exposes them to AI assistants like Claude.
 
 **No API key required.** This server authenticates directly with your Coros Training Hub credentials. Your token is stored securely in your system keyring (or an encrypted local file as fallback), never transmitted anywhere except to Coros.
