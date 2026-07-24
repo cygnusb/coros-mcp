@@ -252,14 +252,32 @@ async def authenticate_coros_mobile(
 # ---------------------------------------------------------------------------
 
 @mcp.tool()
-async def check_coros_auth() -> dict:
+async def check_coros_auth(verify_with_server: bool = False) -> dict:
     """
     Check whether valid Coros access tokens are stored locally.
+
+    By default this is a LOCAL check only: ``authenticated: true`` means the stored
+    token has not passed its 24h TTL by the local clock — it does NOT confirm the
+    token is still accepted by Coros. A token can be revoked server-side (password
+    change, account lock) or invalidated early and still report authenticated here;
+    the next real data call would then fail with an auth error (which triggers a
+    re-login retry). ``expires_in_hours`` is likewise a local TTL estimate.
+
+    Parameters
+    ----------
+    verify_with_server : bool
+        When True, additionally make one lightweight read call to Coros to confirm
+        the web token is still accepted, adding a ``server_verified`` key:
+        ``True`` (accepted), ``False`` (rejected — revoked/expired/wrong region), or
+        ``None`` (inconclusive, e.g. a network error) with a ``server_message``.
+        This does not re-login or alter the stored token. Off by default to keep
+        the check cheap and offline.
 
     Returns
     -------
     dict with keys: authenticated, user_id, region, expires_in_hours,
-    mobile_authenticated, mobile_token_status
+    mobile_authenticated, mobile_token_status (plus server_verified/server_message
+    when verify_with_server is True)
     """
     auth = coros_api.get_stored_auth()
     if auth is None:
@@ -281,7 +299,7 @@ async def check_coros_auth() -> dict:
     else:
         mobile_status = "missing (run auth or auth-mobile)"
 
-    return {
+    result = {
         "authenticated": bool(auth.access_token),
         "user_id": auth.user_id,
         "region": auth.region,
@@ -289,6 +307,31 @@ async def check_coros_auth() -> dict:
         "mobile_authenticated": has_mobile,
         "mobile_token_status": mobile_status,
     }
+
+    if verify_with_server:
+        result.update(await _verify_web_token_status(auth))
+
+    return result
+
+
+async def _verify_web_token_status(auth: coros_api.StoredAuth) -> dict:
+    """Probe Coros to confirm the web token, mapping the outcome to result keys.
+
+    Never raises: a rejected token yields server_verified False, while a network
+    or decode failure yields None (inconclusive) — a transport error must not be
+    read as "token invalid". CorosAPIError is caught before httpx errors and
+    before the generic ValueError (of which it is a subclass)."""
+    try:
+        await coros_api.verify_web_token(auth)
+        return {"server_verified": True}
+    except coros_api.CorosAPIError as exc:
+        return {"server_verified": False, "server_message": str(exc)}
+    except httpx.HTTPStatusError as exc:
+        if exc.response.status_code in (401, 403):
+            return {"server_verified": False, "server_message": f"HTTP {exc.response.status_code}"}
+        return {"server_verified": None, "server_message": f"inconclusive: HTTP {exc.response.status_code}"}
+    except (httpx.HTTPError, ValueError) as exc:
+        return {"server_verified": None, "server_message": f"inconclusive: {exc}"}
 
 
 # ---------------------------------------------------------------------------
