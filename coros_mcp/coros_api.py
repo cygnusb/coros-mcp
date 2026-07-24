@@ -407,6 +407,26 @@ def _auth_headers(auth: StoredAuth) -> dict:
     }
 
 
+async def verify_web_token(auth: StoredAuth) -> None:
+    """Confirm with Coros that the stored web access token is still accepted.
+
+    Performs a single GET against the dashboard endpoint — the cheapest
+    authenticated read — and only checks the result code; the body is not
+    parsed further. Raises CorosAPIError on an auth failure (e.g. result
+    "1019" = "Access token is invalid") or httpx.HTTPStatusError on 401/403.
+    Does NOT re-login or mutate the stored token, so the caller sees the
+    token's true server-side state.
+    """
+    if not auth.access_token:
+        raise CorosAPIError("no_token", "No web access token stored")
+    url = _base_url(auth.region) + ENDPOINTS["dashboard"]
+    async with httpx.AsyncClient(timeout=15) as client:
+        resp = await client.get(url, headers=_auth_headers(auth))
+        resp.raise_for_status()
+        body = resp.json()
+    _check_response(body, "token verification")
+
+
 # ---------------------------------------------------------------------------
 # HRV data  (confirmed: /dashboard/query → data.summaryInfo.sleepHrvData)
 # ---------------------------------------------------------------------------
