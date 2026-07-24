@@ -173,9 +173,21 @@ async def _mobile_login(email: str, password: str, region: str = "eu") -> tuple[
         "hasHrCalibrated": 0,
         "kbValidity": 0,
         "pwd": _mobile_encrypt(_md5(password), app_key) + "\n",
+        # Device SIM/locale telemetry captured from a real login, NOT the Coros
+        # account region: "<MCC>|<device timezone>|<locale>" (310 = US SIM MCC of
+        # the capture emulator). Account region routing is done by the base URL
+        # (apieu vs apius) above; this field is not validated against the account
+        # — an EU account logs in with MCC 310 and gets EU data. Do not make it
+        # region-dependent without a real US-region capture confirming the format.
         "region": "310|Europe/Berlin|US",
         "skipValidation": False,
     }
+    # Hardcoded Android device fingerprint captured from a working Coros mobile
+    # app login (mitmproxy). If Coros starts rejecting stale clients (e.g. a
+    # "Parameter input error" or version-blocked response on mobile login), these
+    # values must be refreshed from a current APK / a fresh app-login capture:
+    # appVersion/versionCode/systemVersion track the app+OS build, mobileName is
+    # the device model triple. There is no auto-update path — this is a manual bump.
     yfheader = json.dumps({
         "appVersion": 1125917087236096,
         "clientType": 1,

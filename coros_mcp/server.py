@@ -256,6 +256,13 @@ async def check_coros_auth() -> dict:
     """
     Check whether valid Coros access tokens are stored locally.
 
+    This is a LOCAL check only: ``authenticated: true`` means the stored token has
+    not passed its 24h TTL by the local clock — it does NOT confirm the token is
+    still accepted by Coros. A token can be revoked server-side (password change,
+    account lock) or invalidated early and still report authenticated here; the
+    next real data call would then fail with an auth error (which triggers a
+    re-login retry). ``expires_in_hours`` is likewise a local TTL estimate.
+
     Returns
     -------
     dict with keys: authenticated, user_id, region, expires_in_hours,
