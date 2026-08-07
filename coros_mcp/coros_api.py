@@ -836,6 +836,50 @@ def _build_workout_program_payload(
     total_seconds = 0
     ex_id = 0  # sequential exercise IDs (API uses these to link groups)
 
+    def _target_fields(s: dict) -> dict:
+        """Return the targetType/targetValue/intensityMultiplier fields for a
+        step, plus its intensity values scaled to match.
+
+        Two mutually exclusive duration keys are supported:
+          - duration_minutes: time-based (targetType=2, seconds, intensity
+            values used as-is).
+          - duration_meters: distance-based (targetType=5, meters x100 -- the
+            same convention every other distance field in this API uses --
+            intensityMultiplier=1000 with intensity values scaled x1000).
+
+        The x1000 intensity scaling for distance steps and targetType=5 are
+        not documented anywhere in Coros's API; confirmed by building a
+        distance-type step in the Coros app itself and reading back the raw
+        values via /training/schedule/query. targetType=1 (a natural first
+        guess) is NOT distance -- it silently produces a zero-duration,
+        zero-distance step with no error.
+        """
+        low = s.get("intensity_low", s.get("power_low_w", 0))
+        high = s.get("intensity_high", s.get("power_high_w", 0))
+        if "duration_meters" in s:
+            return {
+                "targetType": 5,
+                "targetValue": int(s["duration_meters"] * 100),
+                "intensityValue": int(low * 1000),
+                "intensityValueExtend": int(high * 1000),
+                "intensityMultiplier": 1000,
+                "seconds": 0,  # real elapsed time is unknown ahead of time
+            }
+        if "duration_minutes" not in s:
+            raise ValueError(
+                f"step {s.get('name', '<unnamed>')!r} needs duration_minutes "
+                "or duration_meters"
+            )
+        duration_s = int(s["duration_minutes"] * 60)
+        return {
+            "targetType": 2,
+            "targetValue": duration_s,
+            "intensityValue": low,
+            "intensityValueExtend": high,
+            "intensityMultiplier": 0,
+            "seconds": duration_s,
+        }
+
     # Workout API uses a single Running wire ID (sportType=1); the activity
     # API splits runs into 100 (Running), 102 (Trail), 103 (Track). Accept
     # the activity-side IDs (what list_activities returns) and map them onto
@@ -869,9 +913,8 @@ def _build_workout_program_payload(
             group_id = ex_id
 
             sub_steps = step["steps"]
-            iteration_seconds = sum(
-                int(s["duration_minutes"] * 60) for s in sub_steps
-            )
+            sub_fields = [_target_fields(s) for s in sub_steps]
+            iteration_seconds = sum(f["seconds"] for f in sub_fields)
             total_seconds += iteration_seconds * step["repeat"]
 
             exercises.append({
@@ -892,19 +935,19 @@ def _build_workout_program_payload(
                 "originId": "0",
             })
 
-            for j, sub in enumerate(sub_steps):
+            for j, (sub, fields) in enumerate(zip(sub_steps, sub_fields, strict=True)):
                 ex_id += 1
-                sub_duration = int(sub["duration_minutes"] * 60)
                 exercises.append({
                     "id": ex_id,
                     "name": sub["name"],
                     "exerciseType": 2,
                     "sportType": wire_sport_type,
                     "intensityType": intensity_type,
-                    "intensityValue": sub.get("intensity_low", sub.get("power_low_w", 0)),
-                    "intensityValueExtend": sub.get("intensity_high", sub.get("power_high_w", 0)),
-                    "targetType": 2,
-                    "targetValue": sub_duration,
+                    "intensityValue": fields["intensityValue"],
+                    "intensityValueExtend": fields["intensityValueExtend"],
+                    "intensityMultiplier": fields["intensityMultiplier"],
+                    "targetType": fields["targetType"],
+                    "targetValue": fields["targetValue"],
                     "sets": 1,
                     "sortNo": group_sort + 65536 * (j + 1),
                     "restType": 3,
@@ -917,18 +960,19 @@ def _build_workout_program_payload(
             # --- Plain step ---
             top_index += 1
             ex_id += 1
-            duration_s = int(step["duration_minutes"] * 60)
-            total_seconds += duration_s
+            fields = _target_fields(step)
+            total_seconds += fields["seconds"]
             exercises.append({
                 "id": ex_id,
                 "name": step["name"],
                 "exerciseType": 2,
                 "sportType": wire_sport_type,
                 "intensityType": intensity_type,
-                "intensityValue": step.get("intensity_low", step.get("power_low_w", 0)),
-                "intensityValueExtend": step.get("intensity_high", step.get("power_high_w", 0)),
-                "targetType": 2,
-                "targetValue": duration_s,
+                "intensityValue": fields["intensityValue"],
+                "intensityValueExtend": fields["intensityValueExtend"],
+                "intensityMultiplier": fields["intensityMultiplier"],
+                "targetType": fields["targetType"],
+                "targetValue": fields["targetValue"],
                 "sets": 1,
                 "sortNo": 16777216 * top_index,
                 "restType": 3,

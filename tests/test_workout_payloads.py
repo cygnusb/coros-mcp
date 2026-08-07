@@ -317,6 +317,86 @@ def test_cycling_empty_steps_raises():
         _build_workout_program_payload(name="empty", steps=[])
 
 
+def test_distance_step_target_type_and_value():
+    """duration_meters emits targetType=5, targetValue in meters x100, and
+    scales intensity by x1000 with intensityMultiplier=1000 -- confirmed
+    against a real distance-type step built in the Coros app and read back
+    via the API, not documented anywhere in Coros's own API."""
+    payload = _build_workout_program_payload(
+        name="1km rep",
+        steps=[
+            {"name": "1km @ 4:00/km", "duration_meters": 1000, "intensity_low": 235, "intensity_high": 245},
+        ],
+    )
+    ex = payload["exercises"][0]
+    assert ex["targetType"] == 5
+    assert ex["targetValue"] == 100000  # 1000m x 100
+    assert ex["intensityValue"] == 235000  # 235 sec/km x 1000
+    assert ex["intensityValueExtend"] == 245000
+    assert ex["intensityMultiplier"] == 1000
+
+
+def test_time_step_intensity_multiplier_is_zero():
+    """Time-based steps get an explicit intensityMultiplier=0 (matching what
+    the server echoes back for them), not just an absent key."""
+    payload = _build_workout_program_payload(
+        name="tempo",
+        steps=[
+            {"name": "Tempo", "duration_minutes": 20, "intensity_low": 240, "intensity_high": 250},
+        ],
+    )
+    ex = payload["exercises"][0]
+    assert ex["targetType"] == 2
+    assert ex["intensityMultiplier"] == 0
+    assert ex["intensityValue"] == 240  # unscaled
+
+
+def test_distance_step_does_not_contribute_to_estimated_time():
+    """A distance step's real elapsed time isn't known ahead of time, so it
+    contributes 0 rather than a guess -- estimatedTime only reflects the
+    time-based steps in a mixed workout."""
+    payload = _build_workout_program_payload(
+        name="mixed",
+        steps=[
+            {"name": "Warmup", "duration_minutes": 10, "intensity_low": 300, "intensity_high": 360},
+            {"name": "22km @ open pace", "duration_meters": 22000, "intensity_low": 240, "intensity_high": 480},
+        ],
+    )
+    assert payload["estimatedTime"] == 10 * 60
+
+
+def test_distance_step_in_repeat_group():
+    """duration_meters works inside a repeat group's sub-steps too, and is
+    excluded from the group header's own time-based targetValue."""
+    payload = _build_workout_program_payload(
+        name="6x1km",
+        steps=[
+            {"repeat": 6, "steps": [
+                {"name": "1km", "duration_meters": 1000, "intensity_low": 235, "intensity_high": 245},
+                {"name": "Recovery", "duration_minutes": 2, "intensity_low": 330, "intensity_high": 480},
+            ]},
+        ],
+    )
+    header, rep, recovery = payload["exercises"][0], payload["exercises"][1], payload["exercises"][2]
+    # group header's targetValue is one iteration's seconds (distance sub-step
+    # contributes 0): 0 + 120 = 120. The x6 repeat is a separate `sets` field,
+    # not baked into this value.
+    assert header["targetValue"] == 120
+    assert header["sets"] == 6
+    assert rep["targetType"] == 5
+    assert rep["targetValue"] == 100000
+    assert recovery["targetType"] == 2
+    assert recovery["targetValue"] == 120
+
+
+def test_step_missing_both_duration_keys_raises():
+    with pytest.raises(ValueError, match="duration_minutes or duration_meters"):
+        _build_workout_program_payload(
+            name="broken",
+            steps=[{"name": "???", "intensity_low": 100, "intensity_high": 150}],
+        )
+
+
 def test_cycling_sport_and_intensity_types_propagate():
     payload = _build_workout_program_payload(
         name="hr",

@@ -107,16 +107,22 @@ def _attach_enrichment_warning(result: dict, response: dict) -> dict:
 
 
 def _summarize_steps(steps: list[dict]) -> tuple[float, int]:
-    """Return (total_minutes, steps_count) for a workout step list."""
+    """Return (total_minutes, steps_count) for a workout step list.
+
+    total_minutes only counts duration_minutes steps -- a duration_meters
+    step's real elapsed time isn't known ahead of time, so it contributes 0
+    to the total rather than a guess. Check steps_count against len(steps)
+    if a workout mixes both kinds and the total looks low.
+    """
     total_minutes = 0.0
     steps_count = 0
     for s in steps:
         if "repeat" in s:
-            sub_mins = sum(sub["duration_minutes"] for sub in s["steps"])
+            sub_mins = sum(sub.get("duration_minutes", 0) for sub in s["steps"])
             total_minutes += sub_mins * s["repeat"]
             steps_count += 1 + len(s["steps"])
         else:
-            total_minutes += s["duration_minutes"]
+            total_minutes += s.get("duration_minutes", 0)
             steps_count += 1
     return total_minutes, steps_count
 
@@ -744,7 +750,13 @@ async def save_workout_template(
 
         Plain step:
         - name (str): step label, e.g. "10:00 Warm-up"
-        - duration_minutes (float): step duration in minutes
+        - duration_minutes (float) OR duration_meters (float): step length,
+          time-based or distance-based. Use duration_meters for a step that
+          should end at a real distance regardless of pace (e.g. "1000" for
+          a 1km rep) rather than an estimated time -- a duration_minutes
+          step ends after that much elapsed time even if actual pace made it
+          cover more or less than the intended distance. Exactly one of the
+          two is required.
         - intensity_low (int): lower intensity target (watts, BPM, etc. depending on intensity_type)
         - intensity_high (int): upper intensity target (0 = open-ended)
         Note: power_low_w / power_high_w are accepted as legacy aliases for intensity_low / intensity_high.
@@ -762,6 +774,10 @@ async def save_workout_template(
             ]},
             {"name": "Cool-down", "duration_minutes": 10, "intensity_low": 100, "intensity_high": 165},
         ]
+
+        Distance-based rep (intensity_low/high in pace seconds/km when
+        intensity_type=3), ends at a real 1000m regardless of actual pace:
+        {"name": "1km @ 4:00/km", "duration_meters": 1000, "intensity_low": 235, "intensity_high": 245}
 
     sport_type : int
         Sport type ID, in the ACTIVITY namespace (the same IDs list_activities
