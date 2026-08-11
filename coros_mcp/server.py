@@ -18,12 +18,15 @@ transparently whenever the stored token is expired or rejected.
 """
 
 import json
+import os
 import time
 from datetime import datetime, timedelta
+from typing import Annotated, Literal
 
 import httpx
 from dotenv import load_dotenv
 from fastmcp import FastMCP
+from pydantic import Field
 
 from coros_mcp import coros_api
 from coros_mcp.cache.store import cache_status, init_db
@@ -42,6 +45,69 @@ load_dotenv()
 init_db()
 
 mcp = FastMCP("coros-mcp")
+
+# ---------------------------------------------------------------------------
+# Toolset gating
+#
+# COROS_MCP_TOOLSET=readonly exposes only the compact read surface (metrics,
+# sleep, activities, plans, cache) and hides everything that writes to the
+# Coros account plus the low-level raw/update escape hatches — recommended
+# when the MCP client is an autonomous agent or a smaller model that handles
+# a large tool list poorly. Default: full (all tools, backward compatible).
+#
+# COROS_MCP_HIDE_AUTH_TOOLS=1 additionally hides authenticate_coros /
+# authenticate_coros_mobile so account credentials never travel through the
+# model context; authentication then happens exclusively via the
+# COROS_EMAIL / COROS_PASSWORD env auto-login.
+# ---------------------------------------------------------------------------
+
+_TOOLSET = os.environ.get("COROS_MCP_TOOLSET", "full").strip().lower()
+if _TOOLSET not in ("full", "readonly"):
+    raise ValueError(
+        f"COROS_MCP_TOOLSET must be 'full' or 'readonly', got {_TOOLSET!r}"
+    )
+_HIDE_AUTH_TOOLS = (
+    os.environ.get("COROS_MCP_HIDE_AUTH_TOOLS", "").strip().lower()
+    in ("1", "true", "yes")
+)
+
+# Names of the functions actually registered as MCP tools (get_help filters
+# its listing against this so hidden tools are never advertised).
+_ENABLED_TOOLS: set[str] = set()
+
+# MCP ToolAnnotations presets (hints for the client's permission handling).
+_READ = {"readOnlyHint": True, "openWorldHint": True}
+_READ_LOCAL = {"readOnlyHint": True, "openWorldHint": False}
+_WRITE = {"readOnlyHint": False, "destructiveHint": False, "openWorldHint": True}
+_DESTRUCTIVE = {"readOnlyHint": False, "destructiveHint": True, "openWorldHint": True}
+
+
+def _tool(*, write: bool = False, advanced: bool = False, auth_tool: bool = False,
+          annotations: dict | None = None):
+    """Register a function as an MCP tool unless the toolset excludes it.
+
+    write: modifies the Coros account server-side.
+    advanced: raw/low-level escape hatch only useful in write workflows.
+    auth_tool: takes account credentials as parameters.
+
+    Excluded functions stay plain importable/callable Python functions —
+    they are just not exposed over MCP.
+    """
+    def deco(fn):
+        if _TOOLSET == "readonly" and (write or advanced or auth_tool):
+            return fn
+        if _HIDE_AUTH_TOOLS and auth_tool:
+            return fn
+        _ENABLED_TOOLS.add(fn.__name__)
+        return mcp.tool(annotations=annotations)(fn)
+    return deco
+
+
+# YYYYMMDD parameter types — the pattern lands in the JSON schema, so
+# malformed dates are rejected by the MCP layer before any API call.
+_Day = Annotated[str, Field(pattern=r"^\d{8}$")]
+_DayOrEmpty = Annotated[str, Field(pattern=r"^(\d{8})?$")]
+_Weeks = Annotated[int, Field(ge=1, le=52)]
 
 _NOT_AUTHENTICATED = "Not authenticated. Set COROS_EMAIL and COROS_PASSWORD in .env or call authenticate_coros."  # noqa: E501
 
@@ -125,38 +191,42 @@ def _summarize_steps(steps: list[dict]) -> tuple[float, int]:
 # Tool: get_help
 # ---------------------------------------------------------------------------
 
-@mcp.tool()
+_TOOL_DESCRIPTIONS = [
+    {"name": "get_help", "description": "List all available tools (this tool)"},
+    {"name": "authenticate_coros", "description": "Log in with email/password; stores web API token (required before all data tools)"},  # noqa: E501
+    {"name": "authenticate_coros_mobile", "description": "Add mobile token for sleep stage data (deep/light/REM/awake)"},  # noqa: E501
+    {"name": "check_coros_auth", "description": "Show current auth status, region, and token expiry"},
+    {"name": "get_daily_metrics", "description": "Fetch daily training metrics: HRV, sleep hours, steps, stress, resting HR, VO2max, fitness score"},  # noqa: E501
+    {"name": "get_sleep_data", "description": "Fetch nightly sleep records with duration and quality score (mobile auth required for stage breakdown)"},  # noqa: E501
+    {"name": "list_activities", "description": "List recorded activities (runs, rides, swims, etc.) with summaries"},  # noqa: E501
+    {"name": "get_activity_detail", "description": "Get full detail for one activity by label_id"},
+    {"name": "list_workout_templates", "description": "List reusable workout templates saved in the Coros library"},  # noqa: E501
+    {"name": "list_training_plans", "description": "List training plans saved in the Coros Training Hub"},  # noqa: E501
+    {"name": "list_training_plans_raw", "description": "List raw training plans including entities and programs"},  # noqa: E501
+    {"name": "save_workout_template", "description": "Save a reusable cycling/intervals/running workout template to the library"},  # noqa: E501
+    {"name": "save_strength_workout_template", "description": "Save a reusable strength workout template to the library"},  # noqa: E501
+    {"name": "delete_workout_template", "description": "Delete a saved workout template by workout_id"},
+    {"name": "list_planned_activities", "description": "List workouts scheduled on the training calendar"},
+    {"name": "list_planned_activities_raw", "description": "List raw scheduled workouts for calendar update workflows"},  # noqa: E501
+    {"name": "calculate_workout_program", "description": "Recalculate edited workout program metrics before updating"},  # noqa: E501
+    {"name": "schedule_workout", "description": "Schedule a one-off cycling/intervals/running workout for a date (no library entry)"},  # noqa: E501
+    {"name": "add_planned_workout", "description": "Add an inline planned workout to the training calendar from raw objects"},  # noqa: E501
+    {"name": "update_scheduled_workout", "description": "Update an existing scheduled workout on the calendar"},  # noqa: E501
+    {"name": "schedule_strength_workout", "description": "Schedule a one-off strength workout for a date (no library entry)"},  # noqa: E501
+    {"name": "schedule_workout_template", "description": "Schedule an existing library workout template on a specific date"},  # noqa: E501
+    {"name": "remove_scheduled_workout", "description": "Remove a workout from the training calendar"},
+    {"name": "list_exercises", "description": "List available strength exercises (used when building strength workouts)"},  # noqa: E501
+    {"name": "sync_coros_data", "description": "Backfill local cache from the Coros API for a date range"},
+    {"name": "get_cache_status", "description": "Show local cache coverage: date ranges stored for each data type"},  # noqa: E501
+]
+
+
+@_tool(annotations=_READ_LOCAL)
 async def get_help() -> dict:
     """List all available Coros MCP tools with a short description of each."""
     return {
-        "tools": [
-            {"name": "get_help", "description": "List all available tools (this tool)"},
-            {"name": "authenticate_coros", "description": "Log in with email/password; stores web API token (required before all data tools)"},  # noqa: E501
-            {"name": "authenticate_coros_mobile", "description": "Add mobile token for sleep stage data (deep/light/REM/awake)"},  # noqa: E501
-            {"name": "check_coros_auth", "description": "Show current auth status, region, and token expiry"},
-            {"name": "get_daily_metrics", "description": "Fetch daily training metrics: HRV, sleep hours, steps, stress, resting HR, VO2max, fitness score"},  # noqa: E501
-            {"name": "get_sleep_data", "description": "Fetch nightly sleep records with duration and quality score (mobile auth required for stage breakdown)"},  # noqa: E501
-            {"name": "list_activities", "description": "List recorded activities (runs, rides, swims, etc.) with summaries"},  # noqa: E501
-            {"name": "get_activity_detail", "description": "Get full detail for one activity by label_id"},
-            {"name": "list_workout_templates", "description": "List reusable workout templates saved in the Coros library"},  # noqa: E501
-            {"name": "list_training_plans", "description": "List training plans saved in the Coros Training Hub"},  # noqa: E501
-            {"name": "list_training_plans_raw", "description": "List raw training plans including entities and programs"},  # noqa: E501
-            {"name": "save_workout_template", "description": "Save a reusable cycling/intervals/running workout template to the library"},  # noqa: E501
-            {"name": "save_strength_workout_template", "description": "Save a reusable strength workout template to the library"},  # noqa: E501
-            {"name": "delete_workout_template", "description": "Delete a saved workout template by workout_id"},
-            {"name": "list_planned_activities", "description": "List workouts scheduled on the training calendar"},
-            {"name": "list_planned_activities_raw", "description": "List raw scheduled workouts for calendar update workflows"},  # noqa: E501
-            {"name": "calculate_workout_program", "description": "Recalculate edited workout program metrics before updating"},  # noqa: E501
-            {"name": "schedule_workout", "description": "Schedule a one-off cycling/intervals/running workout for a date (no library entry)"},  # noqa: E501
-            {"name": "add_planned_workout", "description": "Add an inline planned workout to the training calendar from raw objects"},  # noqa: E501
-            {"name": "update_scheduled_workout", "description": "Update an existing scheduled workout on the calendar"},  # noqa: E501
-            {"name": "schedule_strength_workout", "description": "Schedule a one-off strength workout for a date (no library entry)"},  # noqa: E501
-            {"name": "schedule_workout_template", "description": "Schedule an existing library workout template on a specific date"},  # noqa: E501
-            {"name": "remove_scheduled_workout", "description": "Remove a workout from the training calendar"},
-            {"name": "list_exercises", "description": "List available strength exercises (used when building strength workouts)"},  # noqa: E501
-            {"name": "sync_coros_data", "description": "Backfill local cache from the Coros API for a date range"},
-            {"name": "get_cache_status", "description": "Show local cache coverage: date ranges stored for each data type"},  # noqa: E501
-        ]
+        "toolset": _TOOLSET,
+        "tools": [t for t in _TOOL_DESCRIPTIONS if t["name"] in _ENABLED_TOOLS],
     }
 
 
@@ -164,11 +234,11 @@ async def get_help() -> dict:
 # Tool: authenticate_coros
 # ---------------------------------------------------------------------------
 
-@mcp.tool()
+@_tool(auth_tool=True, annotations=_WRITE)
 async def authenticate_coros(
     email: str,
     password: str,
-    region: str = "eu",
+    region: Literal["eu", "us"] = "eu",
 ) -> dict:
     """
     Authenticate with the Coros Training Hub API and store the access token.
@@ -206,11 +276,11 @@ async def authenticate_coros(
 # Tool: authenticate_coros_mobile
 # ---------------------------------------------------------------------------
 
-@mcp.tool()
+@_tool(auth_tool=True, annotations=_WRITE)
 async def authenticate_coros_mobile(
     email: str,
     password: str,
-    region: str = "eu",
+    region: Literal["eu", "us"] = "eu",
 ) -> dict:
     """
     Authenticate with the Coros mobile API only and store the mobile token.
@@ -251,7 +321,7 @@ async def authenticate_coros_mobile(
 # Tool: check_coros_auth
 # ---------------------------------------------------------------------------
 
-@mcp.tool()
+@_tool(annotations=_READ)
 async def check_coros_auth(verify_with_server: bool = False) -> dict:
     """
     Check whether valid Coros access tokens are stored locally.
@@ -338,8 +408,8 @@ async def _verify_web_token_status(auth: coros_api.StoredAuth) -> dict:
 # Tool: get_daily_metrics
 # ---------------------------------------------------------------------------
 
-@mcp.tool()
-async def get_daily_metrics(weeks: int = 4) -> dict:
+@_tool(annotations=_READ)
+async def get_daily_metrics(weeks: _Weeks = 4) -> dict:
     """
     Retrieve nightly HRV and daily metrics from Coros for a configurable
     time range (up to 52 weeks).
@@ -404,8 +474,8 @@ async def get_daily_metrics(weeks: int = 4) -> dict:
 # Tool: get_sleep_data
 # ---------------------------------------------------------------------------
 
-@mcp.tool()
-async def get_sleep_data(weeks: int = 4) -> dict:
+@_tool(annotations=_READ)
+async def get_sleep_data(weeks: _Weeks = 4) -> dict:
     """
     Fetch nightly sleep data from Coros for a configurable time range.
 
@@ -460,12 +530,12 @@ async def get_sleep_data(weeks: int = 4) -> dict:
 # Tool: list_activities
 # ---------------------------------------------------------------------------
 
-@mcp.tool()
+@_tool(annotations=_READ)
 async def list_activities(
-    start_day: str,
-    end_day: str,
-    page: int = 1,
-    size: int = 30,
+    start_day: _Day,
+    end_day: _Day,
+    page: Annotated[int, Field(ge=1)] = 1,
+    size: Annotated[int, Field(ge=1, le=100)] = 30,
 ) -> dict:
     """
     List Coros activities for a date range.
@@ -586,7 +656,7 @@ def _compact_activity(data: dict) -> dict:
     return out
 
 
-@mcp.tool()
+@_tool(annotations=_READ)
 async def get_activity_detail(activity_id: str, sport_type: int = 0) -> dict:
     """
     Fetch detail for a single Coros activity.
@@ -621,7 +691,7 @@ async def get_activity_detail(activity_id: str, sport_type: int = 0) -> dict:
 # Tool: list_workout_templates
 # ---------------------------------------------------------------------------
 
-@mcp.tool()
+@_tool(annotations=_READ)
 async def list_workout_templates() -> dict:
     """
     List reusable workout templates saved in the Coros library.
@@ -652,7 +722,7 @@ async def list_workout_templates() -> dict:
 # Tool: list_training_plans
 # ---------------------------------------------------------------------------
 
-@mcp.tool()
+@_tool(annotations=_READ)
 async def list_training_plans(
     status_list: list[int] | None = None,
 ) -> dict:
@@ -684,7 +754,7 @@ async def list_training_plans(
 # Tool: list_training_plans_raw
 # ---------------------------------------------------------------------------
 
-@mcp.tool()
+@_tool(advanced=True, annotations=_READ)
 async def list_training_plans_raw(
     status_list: list[int] | None = None,
 ) -> dict:
@@ -708,7 +778,7 @@ async def list_training_plans_raw(
 # Tool: save_workout_template
 # ---------------------------------------------------------------------------
 
-@mcp.tool()
+@_tool(write=True, annotations=_WRITE)
 async def save_workout_template(
     name: str,
     steps: list[dict],
@@ -755,12 +825,12 @@ async def save_workout_template(
 
         Example:
         [
-            {"name": "Warm-up", "duration_minutes": 10, "intensity_low": 148, "intensity_high": 192},
+    {"name": "Warm-up", "duration_minutes": 10, "intensity_low": 148, "intensity_high": 192},
             {"repeat": 3, "steps": [
                 {"name": "Sweetspot", "duration_minutes": 10, "intensity_low": 265, "intensity_high": 285},
                 {"name": "Recovery", "duration_minutes": 3, "intensity_low": 150, "intensity_high": 175},
             ]},
-            {"name": "Cool-down", "duration_minutes": 10, "intensity_low": 100, "intensity_high": 165},
+    {"name": "Cool-down", "duration_minutes": 10, "intensity_low": 100, "intensity_high": 165},
         ]
 
     sport_type : int
@@ -805,7 +875,7 @@ async def save_workout_template(
 # Tool: delete_workout_template
 # ---------------------------------------------------------------------------
 
-@mcp.tool()
+@_tool(write=True, annotations=_DESTRUCTIVE)
 async def delete_workout_template(
     workout_id: str,
 ) -> dict:
@@ -839,10 +909,10 @@ async def delete_workout_template(
 # Tool: list_planned_activities
 # ---------------------------------------------------------------------------
 
-@mcp.tool()
+@_tool(annotations=_READ)
 async def list_planned_activities(
-    start_day: str,
-    end_day: str,
+    start_day: _Day,
+    end_day: _Day,
 ) -> dict:
     """
     List planned (scheduled) activities from the Coros training calendar.
@@ -877,10 +947,10 @@ async def list_planned_activities(
 # Tool: list_planned_activities_raw
 # ---------------------------------------------------------------------------
 
-@mcp.tool()
+@_tool(advanced=True, annotations=_READ)
 async def list_planned_activities_raw(
-    start_day: str,
-    end_day: str,
+    start_day: _Day,
+    end_day: _Day,
 ) -> dict:
     """
     List planned activities without stripping API fields.
@@ -907,7 +977,7 @@ async def list_planned_activities_raw(
 # Tool: calculate_workout_program
 # ---------------------------------------------------------------------------
 
-@mcp.tool()
+@_tool(advanced=True, annotations=_READ)
 async def calculate_workout_program(program: dict) -> dict:
     """
     Recalculate a workout program after editing its exercises.
@@ -933,10 +1003,10 @@ async def calculate_workout_program(program: dict) -> dict:
 # Tool: schedule_workout_template
 # ---------------------------------------------------------------------------
 
-@mcp.tool()
+@_tool(write=True, annotations=_WRITE)
 async def schedule_workout_template(
     workout_id: str,
-    happen_day: str,
+    happen_day: _Day,
     sort_no: int = 1,
 ) -> dict:
     """
@@ -995,11 +1065,11 @@ async def schedule_workout_template(
 # Tool: schedule_workout (inline, one-off cycling/intervals)
 # ---------------------------------------------------------------------------
 
-@mcp.tool()
+@_tool(write=True, annotations=_WRITE)
 async def schedule_workout(
     name: str,
     steps: list[dict],
-    happen_day: str,
+    happen_day: _Day,
     sport_type: int = 2,
     intensity_type: int | None = None,
     sort_no: int = 1,
@@ -1087,7 +1157,7 @@ async def schedule_workout(
 # Tool: add_planned_workout
 # ---------------------------------------------------------------------------
 
-@mcp.tool()
+@_tool(write=True, advanced=True, annotations=_WRITE)
 async def add_planned_workout(
     entity: dict,
     program: dict,
@@ -1131,7 +1201,7 @@ async def add_planned_workout(
 # Tool: update_scheduled_workout
 # ---------------------------------------------------------------------------
 
-@mcp.tool()
+@_tool(write=True, advanced=True, annotations=_DESTRUCTIVE)
 async def update_scheduled_workout(
     entity: dict,
     program: dict,
@@ -1177,11 +1247,11 @@ async def update_scheduled_workout(
 # Tool: schedule_strength_workout (inline, one-off strength)
 # ---------------------------------------------------------------------------
 
-@mcp.tool()
+@_tool(write=True, annotations=_WRITE)
 async def schedule_strength_workout(
     name: str,
     exercises: list[dict],
-    happen_day: str,
+    happen_day: _Day,
     sets: int = 1,
     sort_no: int = 1,
 ) -> dict:
@@ -1262,7 +1332,7 @@ async def schedule_strength_workout(
 # Tool: remove_scheduled_workout
 # ---------------------------------------------------------------------------
 
-@mcp.tool()
+@_tool(write=True, annotations=_DESTRUCTIVE)
 async def remove_scheduled_workout(
     plan_id: str,
     id_in_plan: str,
@@ -1300,7 +1370,7 @@ async def remove_scheduled_workout(
 # Tool: save_strength_workout_template
 # ---------------------------------------------------------------------------
 
-@mcp.tool()
+@_tool(write=True, annotations=_WRITE)
 async def save_strength_workout_template(
     name: str,
     exercises: list[dict],
@@ -1383,7 +1453,7 @@ async def save_strength_workout_template(
 # Tool: list_exercises
 # ---------------------------------------------------------------------------
 
-@mcp.tool()
+@_tool(annotations=_READ)
 async def list_exercises(sport_type: int = 4) -> dict:
     """
     List the exercise catalogue for a given sport type.
@@ -1414,8 +1484,8 @@ async def list_exercises(sport_type: int = 4) -> dict:
 # Tool: sync_coros_data
 # ---------------------------------------------------------------------------
 
-@mcp.tool()
-async def sync_coros_data(start_day: str = "", end_day: str = "") -> dict:
+@_tool(annotations={"readOnlyHint": False, "destructiveHint": False, "idempotentHint": True, "openWorldHint": True})
+async def sync_coros_data(start_day: _DayOrEmpty = "", end_day: _DayOrEmpty = "") -> dict:
     """
     Sync Coros data for a date range into the local SQLite cache.
 
@@ -1462,7 +1532,7 @@ async def sync_coros_data(start_day: str = "", end_day: str = "") -> dict:
 # Tool: get_cache_status
 # ---------------------------------------------------------------------------
 
-@mcp.tool()
+@_tool(annotations=_READ_LOCAL)
 async def get_cache_status() -> dict:
     """
     Show what data is currently stored in the local cache.

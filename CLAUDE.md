@@ -62,5 +62,8 @@ All source modules live in the `coros_mcp/` package:
 ### API Response Pattern
 All Coros API responses return `result: "0000"` on success. Any other value indicates an error — check `message` field. Large time-series fields (`graphList`, `frequencyList`, `gpsLightDuration`) are stripped from activity detail responses to keep them manageable.
 
+### Toolset Gating (agent hardening)
+`COROS_MCP_TOOLSET=readonly` registers only the 12 read tools (hides write tools, raw escape hatches, and auth tools); `COROS_MCP_HIDE_AUTH_TOOLS=1` hides just the `authenticate_*` tools. Both are evaluated at import time in `server.py` via the `_tool()` registration wrapper; excluded functions remain plain callables (tests import them directly). `get_help` filters its listing against the registered set. Date/range parameters are schema-validated (`_Day` pattern, `_Weeks` bounds) at the MCP layer.
+
 ### Region Handling
 Regions (`eu`, `us`) map to different base URLs for both APIs. EU tokens only work on EU endpoints — mixing regions causes auth failures.

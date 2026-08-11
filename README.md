@@ -150,6 +150,35 @@ coros-mcp auth-status   # Check if authenticated
 coros-mcp auth-clear    # Remove stored tokens
 ```
 
+#### Step 4 (optional): Restrict the toolset for autonomous agents
+
+When the MCP client is an autonomous agent or a smaller open-weight model
+(e.g. [hermes-agent](https://github.com/NousResearch/hermes-agent) with a
+DeepSeek/Hermes model), two env vars harden the server:
+
+```
+COROS_MCP_TOOLSET=readonly       # expose only the 12 read tools
+COROS_MCP_HIDE_AUTH_TOOLS=1      # hide authenticate_* (credentials never enter the model context)
+```
+
+- `COROS_MCP_TOOLSET=readonly` hides everything that writes to your Coros
+  account (save/schedule/update/delete tools) plus the low-level raw escape
+  hatches, leaving: `get_help`, `check_coros_auth`, `get_daily_metrics`,
+  `get_sleep_data`, `list_activities`, `get_activity_detail`,
+  `list_workout_templates`, `list_training_plans`, `list_planned_activities`,
+  `list_exercises`, `sync_coros_data`, `get_cache_status`. A smaller tool
+  list also improves tool-calling reliability of non-frontier models.
+  Default: `full` (all 26 tools).
+- `COROS_MCP_HIDE_AUTH_TOOLS=1` removes the two `authenticate_*` tools so
+  your password can never travel through the model context or agent logs.
+  Authentication then happens exclusively via the `COROS_EMAIL` /
+  `COROS_PASSWORD` env auto-login (or tokens stored beforehand with
+  `coros-mcp auth`).
+
+All tools additionally carry MCP `readOnlyHint` / `destructiveHint`
+annotations, so agent harnesses that honor them can require confirmation
+for write actions.
+
 ---
 
 ## Tool Reference
