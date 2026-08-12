@@ -397,6 +397,23 @@ def test_step_missing_both_duration_keys_raises():
         )
 
 
+def test_step_with_both_duration_keys_raises():
+    """duration_minutes and duration_meters are mutually exclusive; a step
+    carrying both would be built as a distance step but counted in both
+    summary totals, so reject it outright."""
+    with pytest.raises(ValueError, match="not both"):
+        _build_workout_program_payload(
+            name="broken",
+            steps=[{
+                "name": "???",
+                "duration_minutes": 4,
+                "duration_meters": 1000,
+                "intensity_low": 235,
+                "intensity_high": 245,
+            }],
+        )
+
+
 def test_cycling_sport_and_intensity_types_propagate():
     payload = _build_workout_program_payload(
         name="hr",

@@ -856,6 +856,11 @@ def _build_workout_program_payload(
         """
         low = s.get("intensity_low", s.get("power_low_w", 0))
         high = s.get("intensity_high", s.get("power_high_w", 0))
+        if "duration_meters" in s and "duration_minutes" in s:
+            raise ValueError(
+                f"step {s.get('name', '<unnamed>')!r} must set either "
+                "duration_minutes or duration_meters, not both"
+            )
         if "duration_meters" in s:
             return {
                 "targetType": 5,
