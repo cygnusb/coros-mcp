@@ -669,7 +669,9 @@ async def fetch_activity_detail(auth: StoredAuth, activity_id: str, sport_type: 
 # ---------------------------------------------------------------------------
 
 # sportType=2 = Indoor Cycling (indoor trainer); intensityType=6 = power in watts
-# targetType=2 = time-based (seconds); exerciseType=2 = cycling block
+# targetType=2 = time-based (seconds); targetType=5 = distance-based (meters
+# x100, intensity values x1000 with intensityMultiplier=1000); exerciseType=2
+# = cycling block
 # IntensityType values: 1=weight, 2=HR, 3=pace, 4=speed, 5=none, 6=power, 7=cadence
 
 # Note: the workout API uses sportType=1 for Running; the activity API uses
@@ -706,16 +708,33 @@ _CYCLING_SPORT_TYPES = frozenset({2, 200, 201})
 _KNOWN_SPORT_TYPES = _RUNNING_ACTIVITY_SPORT_TYPES | _CYCLING_SPORT_TYPES
 
 
+def _unscale(value: float | int | None, divisor: int) -> float | int | None:
+    """Divide a wire-scaled value back down, returning an int when exact."""
+    if value is None:
+        return None
+    result = value / divisor
+    return int(result) if result.is_integer() else result
+
+
 def _parse_workout(item: dict) -> dict:
     exercises = []
     for ex in item.get("exercises", []):
-        exercises.append({
+        parsed = {
             "name": ex.get("name"),
-            "duration_seconds": ex.get("targetValue"),
             "intensity_low": ex.get("intensityValue"),
             "intensity_high": ex.get("intensityValueExtend"),
             "sets": ex.get("sets", 1),
-        })
+        }
+        if ex.get("targetType") == 5:
+            # Distance step (see _target_fields): targetValue is meters x100;
+            # intensityMultiplier=1000 means intensity values are scaled x1000.
+            parsed["distance_meters"] = _unscale(ex.get("targetValue"), 100)
+            if ex.get("intensityMultiplier") == 1000:
+                parsed["intensity_low"] = _unscale(parsed["intensity_low"], 1000)
+                parsed["intensity_high"] = _unscale(parsed["intensity_high"], 1000)
+        else:
+            parsed["duration_seconds"] = ex.get("targetValue")
+        exercises.append(parsed)
     # sportType from the workout API is always a wire ID (runs come back as 1,
     # never 100/102/103), so the wire-keyed lookup below is correct here.
     sport = item.get("sportType")
@@ -862,9 +881,21 @@ def _build_workout_program_payload(
                 "duration_minutes or duration_meters, not both"
             )
         if "duration_meters" in s:
+            try:
+                meters = float(s["duration_meters"])
+            except (TypeError, ValueError):
+                raise ValueError(
+                    f"step {s.get('name', '<unnamed>')!r}: duration_meters "
+                    f"must be a number, got {s['duration_meters']!r}"
+                ) from None
+            if meters <= 0:
+                raise ValueError(
+                    f"step {s.get('name', '<unnamed>')!r}: duration_meters "
+                    f"must be positive, got {meters}"
+                )
             return {
                 "targetType": 5,
-                "targetValue": int(s["duration_meters"] * 100),
+                "targetValue": int(meters * 100),
                 "intensityValue": int(low * 1000),
                 "intensityValueExtend": int(high * 1000),
                 "intensityMultiplier": 1000,
@@ -1088,7 +1119,8 @@ async def save_workout_template(
 
     Plain step:
       - name: str — step label (e.g. "10:00 Warm-up")
-      - duration_minutes: float — step duration in minutes
+      - duration_minutes: float — step duration in minutes, OR
+        duration_meters: float — step distance in meters (exactly one of the two)
       - intensity_low: int — lower intensity target (watts, BPM, etc. per intensity_type)
       - intensity_high: int — upper intensity target (0 = open-ended)
 

@@ -899,3 +899,91 @@ async def test_catalog_cache_concurrent_calls_coalesce(clean_catalog_cache, monk
     assert call_count == 1
     for r in results:
         assert set(r.keys()) == {"T1010", "T1052", "T1120"}
+
+
+# ---------------------------------------------------------------------------
+# duration_meters validation (follow-up to PR #52 review)
+# ---------------------------------------------------------------------------
+
+
+def _distance_step(value):
+    return {"name": "step", "duration_meters": value, "intensity_low": 235, "intensity_high": 245}
+
+
+def test_negative_duration_meters_raises():
+    with pytest.raises(ValueError, match="must be positive"):
+        _build_workout_program_payload(name="bad", steps=[_distance_step(-100)])
+
+
+def test_zero_duration_meters_raises():
+    with pytest.raises(ValueError, match="must be positive"):
+        _build_workout_program_payload(name="bad", steps=[_distance_step(0)])
+
+
+def test_non_numeric_duration_meters_raises():
+    """A non-numeric string must not hit Python string-repeat ("1000" * 100)."""
+    with pytest.raises(ValueError, match="must be a number"):
+        _build_workout_program_payload(name="bad", steps=[_distance_step("fast")])
+
+
+def test_numeric_string_duration_meters_coerced():
+    """float() coercion means "1000" builds the same step as 1000."""
+    payload = _build_workout_program_payload(name="ok", steps=[_distance_step("1000")])
+    assert payload["exercises"][0]["targetValue"] == 100000
+
+
+# ---------------------------------------------------------------------------
+# _parse_workout round-trip for distance steps (follow-up to PR #52 review)
+# ---------------------------------------------------------------------------
+
+
+def test_parse_workout_distance_step_round_trips():
+    """A distance step read back from the API must not be misreported as a
+    ~28h duration_seconds with x1000 intensity values."""
+    from coros_mcp.coros_api import _parse_workout
+
+    item = {
+        "id": 42,
+        "name": "1km rep",
+        "sportType": 1,
+        "estimatedTime": 0,
+        "exerciseNum": 1,
+        "exercises": [{
+            "name": "1km @ 4:00/km",
+            "targetType": 5,
+            "targetValue": 100000,
+            "intensityValue": 235000,
+            "intensityValueExtend": 245000,
+            "intensityMultiplier": 1000,
+            "sets": 1,
+        }],
+    }
+    ex = _parse_workout(item)["exercises"][0]
+    assert "duration_seconds" not in ex
+    assert ex["distance_meters"] == 1000
+    assert ex["intensity_low"] == 235
+    assert ex["intensity_high"] == 245
+
+
+def test_parse_workout_time_step_unchanged():
+    from coros_mcp.coros_api import _parse_workout
+
+    item = {
+        "id": 43,
+        "name": "tempo",
+        "sportType": 1,
+        "exercises": [{
+            "name": "Tempo",
+            "targetType": 2,
+            "targetValue": 1200,
+            "intensityValue": 240,
+            "intensityValueExtend": 250,
+            "intensityMultiplier": 0,
+            "sets": 1,
+        }],
+    }
+    ex = _parse_workout(item)["exercises"][0]
+    assert "distance_meters" not in ex
+    assert ex["duration_seconds"] == 1200
+    assert ex["intensity_low"] == 240
+    assert ex["intensity_high"] == 250

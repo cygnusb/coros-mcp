@@ -345,9 +345,11 @@ Save a reusable cycling/intervals workout **template** to the Coros library. The
 }
 ```
 
+**Distance-based steps:** use `duration_meters` instead of `duration_minutes` for a step that should end at a real distance regardless of pace, e.g. `{"name": "1km @ 4:00/km", "duration_meters": 1000, "intensity_low": 235, "intensity_high": 245}` (pace in sec/km with `intensity_type: 3`). Exactly one of the two keys per step.
+
 `sport_type`: `2` = Indoor Cycling (default), `200` = Road Bike
 
-Returns: `workout_id`, `name`, `total_minutes`, `steps_count`, `message`
+Returns: `workout_id`, `name`, `total_minutes`, `distance_meters_total`, `steps_count`, `message`
 
 ### `save_strength_workout_template`
 
