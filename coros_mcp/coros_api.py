@@ -960,6 +960,12 @@ def _build_workout_program_payload(
                 "sportType": wire_sport_type,
                 "intensityType": 0,
                 "intensityValue": 0,
+                # Always sent time-typed; for pure-distance groups this means
+                # targetValue=0, which the server accepts and normalizes to a
+                # distance header itself (targetType=5, targetValue = one
+                # iteration's meters x100) with correct derived distance/
+                # duration/load. Verified live 2026-08-12 by scheduling a
+                # 3x400m distance-only group and reading back the raw values.
                 "targetType": 2,
                 "targetValue": iteration_seconds,
                 "sets": step["repeat"],
