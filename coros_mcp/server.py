@@ -172,19 +172,68 @@ def _attach_enrichment_warning(result: dict, response: dict) -> dict:
     return result
 
 
-def _summarize_steps(steps: list[dict]) -> tuple[float, int]:
-    """Return (total_minutes, steps_count) for a workout step list."""
+def _summarize_steps(steps: list[dict]) -> tuple[float, float, int]:
+    """Return (total_minutes, distance_meters_total, steps_count) for a
+    workout step list.
+
+    total_minutes only counts duration_minutes steps, and
+    distance_meters_total only counts duration_meters steps -- a step's
+    real elapsed time/distance isn't knowable from the other unit ahead of
+    time, so each contributes 0 to the total it doesn't measure rather than
+    a guess. Check steps_count against len(steps), or see the mixed-duration
+    warning attached by _attach_mixed_duration_warning, if a workout mixes
+    both kinds and either total looks low.
+    """
     total_minutes = 0.0
+    distance_meters_total = 0.0
     steps_count = 0
     for s in steps:
         if "repeat" in s:
-            sub_mins = sum(sub["duration_minutes"] for sub in s["steps"])
+            sub_mins = sum(sub.get("duration_minutes", 0) for sub in s["steps"])
+            sub_meters = sum(sub.get("duration_meters", 0) for sub in s["steps"])
             total_minutes += sub_mins * s["repeat"]
+            distance_meters_total += sub_meters * s["repeat"]
             steps_count += 1 + len(s["steps"])
         else:
-            total_minutes += s["duration_minutes"]
+            total_minutes += s.get("duration_minutes", 0)
+            distance_meters_total += s.get("duration_meters", 0)
             steps_count += 1
-    return total_minutes, steps_count
+    return total_minutes, distance_meters_total, steps_count
+
+
+_MIXED_DURATION_WARNING = (
+    "This workout mixes time-based and distance-based steps. total_minutes "
+    "only covers the time-based steps and distance_meters_total only covers "
+    "the distance-based ones -- neither total represents the whole workout's "
+    "length by itself."
+)
+
+
+def _has_mixed_durations(steps: list[dict]) -> bool:
+    """True if steps (including inside repeat groups) mix duration_minutes
+    and duration_meters step types."""
+    has_minutes = False
+    has_meters = False
+    for s in steps:
+        candidates = s["steps"] if "repeat" in s else [s]
+        for c in candidates:
+            if "duration_minutes" in c:
+                has_minutes = True
+            if "duration_meters" in c:
+                has_meters = True
+    return has_minutes and has_meters
+
+
+def _attach_mixed_duration_warning(result: dict, steps: list[dict]) -> dict:
+    """Add (or append to) a top-level `warning` if steps mix time- and
+    distance-based durations, so total_minutes/distance_meters_total aren't
+    misread as covering the whole workout's length."""
+    if _has_mixed_durations(steps):
+        if "warning" in result:
+            result["warning"] = result["warning"] + " " + _MIXED_DURATION_WARNING
+        else:
+            result["warning"] = _MIXED_DURATION_WARNING
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -814,7 +863,13 @@ async def save_workout_template(
 
         Plain step:
         - name (str): step label, e.g. "10:00 Warm-up"
-        - duration_minutes (float): step duration in minutes
+        - duration_minutes (float) OR duration_meters (float): step length,
+          time-based or distance-based. Use duration_meters for a step that
+          should end at a real distance regardless of pace (e.g. "1000" for
+          a 1km rep) rather than an estimated time -- a duration_minutes
+          step ends after that much elapsed time even if actual pace made it
+          cover more or less than the intended distance. Exactly one of the
+          two is required.
         - intensity_low (int): lower intensity target (watts, BPM, etc. depending on intensity_type)
         - intensity_high (int): upper intensity target (0 = open-ended)
         Note: power_low_w / power_high_w are accepted as legacy aliases for intensity_low / intensity_high.
@@ -833,6 +888,10 @@ async def save_workout_template(
     {"name": "Cool-down", "duration_minutes": 10, "intensity_low": 100, "intensity_high": 165},
         ]
 
+        Distance-based rep (intensity_low/high in pace seconds/km when
+        intensity_type=3), ends at a real 1000m regardless of actual pace:
+        {"name": "1km @ 4:00/km", "duration_meters": 1000, "intensity_low": 235, "intensity_high": 245}
+
     sport_type : int
         Sport type ID, in the ACTIVITY namespace (the same IDs list_activities
         returns). Default 2 = Indoor Cycling (indoor trainer).
@@ -849,7 +908,9 @@ async def save_workout_template(
 
     Returns
     -------
-    dict with keys: workout_id, name, total_minutes, steps_count, message
+    dict with keys: workout_id, name, total_minutes, distance_meters_total,
+    steps_count, message, and optionally 'warning' if the workout mixes
+    time-based and distance-based steps (see _summarize_steps)
     """
     auth = await _get_auth()
     if auth is None:
@@ -859,14 +920,16 @@ async def save_workout_template(
             coros_api.save_workout_template, auth, name, steps, sport_type, intensity_type,
             retry_all=False,
         )
-        total_minutes, steps_count = _summarize_steps(steps)
-        return {
+        total_minutes, distance_meters_total, steps_count = _summarize_steps(steps)
+        result = {
             "workout_id": workout_id,
             "name": name,
             "total_minutes": total_minutes,
+            "distance_meters_total": distance_meters_total,
             "steps_count": steps_count,
             "message": "Workout created. Open Coros app → Workouts to sync to watch.",
         }
+        return _attach_mixed_duration_warning(result, steps)
     except Exception as exc:
         return {"error": str(exc)}
 
@@ -1111,8 +1174,10 @@ async def schedule_workout(
 
     Returns
     -------
-    dict with keys: scheduled, name, happen_day, total_minutes, steps_count,
-    response, and optionally 'warning' if enrichment lookup failed.
+    dict with keys: scheduled, name, happen_day, total_minutes,
+    distance_meters_total, steps_count, response, and optionally 'warning'
+    if enrichment lookup failed and/or the workout mixes time-based and
+    distance-based steps (warnings are concatenated if both apply).
 
     The 'response' dict contains the server-assigned identifiers needed to
     later remove this calendar entry: plan_id, id_in_plan, plan_program_id,
@@ -1137,18 +1202,20 @@ async def schedule_workout(
             sort_no,
             retry_all=False,
         )
-        total_minutes, steps_count = _summarize_steps(steps)
-        return _attach_enrichment_warning(
+        total_minutes, distance_meters_total, steps_count = _summarize_steps(steps)
+        result = _attach_enrichment_warning(
             {
                 "scheduled": True,
                 "name": name,
                 "happen_day": happen_day,
                 "total_minutes": total_minutes,
+                "distance_meters_total": distance_meters_total,
                 "steps_count": steps_count,
                 "response": response,
             },
             response,
         )
+        return _attach_mixed_duration_warning(result, steps)
     except Exception as exc:
         return {"error": str(exc), "scheduled": False}
 
