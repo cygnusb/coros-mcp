@@ -59,6 +59,9 @@ All source modules live in the `coros_mcp/` package:
 - **`coros_mcp/cache/`**: SQLite-backed local data store. `store.py` — raw read/write; `sync.py` — smart fetch logic (resolve gaps, backfill, chunk), `_resolve_fetch_range()` decides what to hit the API for, `_fetch_chunked()` splits long uncached ranges into 12-week API calls; `utils.py` — timezone helpers.
 - **`coros_mcp/auth/`**: Token storage abstraction. Priority chain: env var → encrypted file → keyring. `encrypted_store.py` uses AES-256-GCM with a machine-bound key (machine *binding* against off-machine leaks, not protection from local attackers — that comes from 0600 file perms); `keyring_store.py` wraps the system keyring.
 
+### Resting Heart Rate: two distinct fields
+`/analyse/dayDetail/query` returns both `rhr` (daily aggregate, shown in the web dashboard / Training Hub) and `testRhr` (measured resting HR, the value the Coros **app** displays). They routinely differ by several bpm. `DailyRecord` stores both (`rhr`, `test_rhr`); use `test_rhr` when matching against the app. Days cached before `test_rhr` existed have it as `null` — re-sync the range to backfill.
+
 ### API Response Pattern
 All Coros API responses return `result: "0000"` on success. Any other value indicates an error — check `message` field. Large time-series fields (`graphList`, `frequencyList`, `gpsLightDuration`) are stripped from activity detail responses to keep them manageable.
 

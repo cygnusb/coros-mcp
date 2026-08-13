@@ -481,7 +481,12 @@ async def get_daily_metrics(weeks: _Weeks = 4) -> dict:
       - date: YYYYMMDD local date (per COROS_TIMEZONE, defaults to system timezone)
       - avg_sleep_hrv: average nightly RMSSD in ms
       - baseline: rolling baseline RMSSD
-      - rhr: resting heart rate (bpm)
+      - rhr: daily resting heart rate (bpm) — aggregate shown in the Coros
+        web dashboard / Training Hub; differs from the app's displayed value
+      - test_rhr: measured resting heart rate (bpm) — matches the resting HR
+        shown in the Coros app. Prefer this when comparing against the app;
+        may be null for days cached before this field existed (re-sync the
+        range to backfill)
       - training_load: daily training load
       - training_load_ratio: acute/chronic training load ratio
       - tired_rate: fatigue rate

@@ -484,6 +484,7 @@ def _parse_daily_record(item: dict) -> DailyRecord:
         baseline=item.get("sleepHrvBase"),
         interval_list=item.get("sleepHrvIntervalList"),
         rhr=item.get("rhr"),
+        test_rhr=item.get("testRhr"),
         training_load=item.get("trainingLoad"),
         training_load_ratio=item.get("trainingLoadRatio"),
         tired_rate=item.get("tiredRateNew"),

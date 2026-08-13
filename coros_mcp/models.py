@@ -33,7 +33,8 @@ class DailyRecord(BaseModel):
     avg_sleep_hrv: float | None = None
     baseline: float | None = None
     interval_list: list[int] | None = None
-    rhr: int | None = None                      # resting heart rate (bpm)
+    rhr: int | None = None                      # daily RHR aggregate (web dashboard / Training Hub)
+    test_rhr: int | None = None                 # measured RHR shown in the Coros app (API: testRhr)
     training_load: int | None = None
     training_load_ratio: float | None = None    # acute/chronic ratio
     tired_rate: float | None = None
