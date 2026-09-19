@@ -806,11 +806,38 @@ async def list_workout_templates() -> dict:
     Returns
     -------
     dict with keys: workouts (list), count
-    Each entry contains: id, name, sport_type, sport_name,
-    estimated_time_seconds, exercise_count, exercises (list of steps with
-    name, intensity_low, intensity_high, sets, and exactly one duration key:
-    duration_seconds for time-based steps, distance_meters for distance-based
-    steps, or duration_open=True for open/lap-press steps)
+
+    Every entry carries: id, name, sport_type, sport_name,
+    estimated_time_seconds, exercise_count, exercises.
+
+    The shape of `exercises` depends on the namespace, because the two speak
+    different step vocabularies:
+
+    - Endurance (running/cycling): name, intensity_low, intensity_high, sets,
+      and exactly one duration key -- duration_seconds for time-based steps,
+      distance_meters for distance-based, or duration_open=True for
+      open/lap-press steps.
+    - Strength (sport_type 4): name, origin_id, overview, sets, rest_seconds,
+      one of reps (rep-based) or duration_seconds (timed, e.g. a plank), and
+      one load key -- weight_kg, weight_lbs, bodyweight=True, or
+      effort_target (the app's 1-10 RPE scale, used instead of a weight).
+      The load and structural keys (origin_id, overview, sets, rest_seconds,
+      weight_kg, weight_lbs) are the same names save_strength_workout_template
+      takes as INPUT. The target keys are NOT yet: that tool takes
+      target_type/target_value where this returns reps/duration_seconds, and
+      it has no input for bodyweight or effort_target. So this output is not
+      directly pasteable into it -- edit a template by mapping reps ->
+      target_type=3/target_value, or duration_seconds -> target_type=2.
+      No intensity_low/intensity_high: strength puts load in those wire
+      fields, so the endurance names would carry a raw scaled number.
+      Strength entries also carry program-level sets (circuit rounds) and
+      total_duration_seconds.
+
+    Anything this server does not recognize is reported raw rather than
+    guessed at: target_type_raw/target_value_raw for an unknown targetType,
+    rest_type_raw/rest_value_raw for an unknown rest encoding, and
+    intensity_value_raw/intensity_display_unit_raw for an unknown weight
+    unit.
     """
     auth = await _get_auth()
     if auth is None:
