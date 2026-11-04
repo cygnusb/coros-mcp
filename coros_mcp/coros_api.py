@@ -679,12 +679,66 @@ async def fetch_activity_detail(auth: StoredAuth, activity_id: str, sport_type: 
 # Workout programs  (/training/program/query + /training/program/add)
 # ---------------------------------------------------------------------------
 
-# sportType=2 = Indoor Cycling (indoor trainer); intensityType=6 = power in watts
-# targetType=1 = open/manual (targetValue=0 -- no cap, the step ends on a lap
-# press); targetType=2 = time-based (seconds); targetType=5 = distance-based
-# (meters x100, intensity values x1000 with intensityMultiplier=1000);
-# exerciseType=2 = cycling block
+# sportType=2 = Indoor Cycling (indoor trainer); intensityType=6 = power in
+# watts; exerciseType=2 = cycling block
 # IntensityType values: 1=weight, 2=HR, 3=pace, 4=speed, 5=none, 6=power, 7=cadence
+#
+# ---------------------------------------------------------------------------
+# WIRE ENCODING TABLE -- targetType/targetValue by namespace
+# ---------------------------------------------------------------------------
+# A step is a (targetType, targetValue) pair: a tag plus a bare number. The
+# tag's vocabulary DIFFERS between the endurance and strength namespaces, and
+# targetValue carries no unit of its own -- read it only through this table.
+# Keep the read side (_parse_workout / _parse_strength_workout) and the write
+# side (_target_fields / _build_strength_program_payload) in sync with it.
+#
+#   targetType | endurance (run/bike)          | strength (sportType=4)
+#   -----------+-------------------------------+------------------------------
+#       1      | open/manual: targetValue=0,   | --
+#              | no cap, ends on a lap press   |
+#       2      | seconds                       | seconds
+#       3      | --                            | reps
+#       5      | meters x100 (intensity values | --
+#              | x1000, intensityMultiplier    |
+#              | =1000)                        |
+#
+# Anything not in this table is UNKNOWN, not a duration: both parsers surface
+# it as target_type_raw/target_value_raw rather than guessing a unit. Coros
+# adding a fourth type (calories, HR target, ...) should show up as visibly
+# unparsed, not as silently wrong seconds -- that guess is what produced
+# GH #59 (open steps) and GH #60 (strength reps).
+#
+# Strength weight lives in the intensity fields, not in targetValue (see
+# _parse_strength_exercise and the encoding notes in
+# _build_strength_program_payload):
+#   intensityDisplayUnit "6" -> kg:   intensityValue   = kg x 1000
+#   intensityDisplayUnit "7" -> lbs:  intensityPercent = lbs x 1_000_000
+#                                     (intensityValue holds the kg equivalent)
+#   intensityCustom 1        -> bodyweight, whatever the other fields say
+#                               (an explicit 0.0 kg is value=0 with
+#                               intensityCustom=0 -- the marker is the only
+#                               thing separating the two)
+# intensityDisplayUnit=0 is not a third weight unit. With no value it is the
+# app's untouched default (rendered "0.0 kg"); with a value it is an EFFORT
+# target on the app's 1-10 RPE scale, stored UNSCALED -- the one reading of
+# this field that is not a weight at all.
+#
+# Which load types an exercise ACCEPTS is a client-side rule, not a server
+# one. Probed live 2026-09-09 by POSTing deliberately invalid combinations to
+# /training/program/add: an effort target on a weight-only exercise, an
+# effort target of 99 (the app's scale is 1-10), a kg weight on an exercise
+# the app only offers an effort target for, and a 1-second rest (the app's
+# floor is 3s). All six probes returned result "0000" and read back
+# byte-identical. So the server will not reject a nonsensical load -- the
+# parser has to stay readable in the face of values no app screen can
+# produce, and callers should not treat a successful write as validation.
+#
+# The catalogue carries a usable signal, though not an explicit rule list:
+# the 6 entries (of 382) with NO intensityValue key -- warm up, cool down,
+# rest, indoor rower, skierg, burpee -- are the weightless ones, and the
+# burpee is the one confirmed in the app to offer an effort target instead
+# of a weight. The 8 entries carrying exerciseKind (1-8) are the HYROX
+# stations, a separate axis.
 
 # Note: the workout API uses sportType=1 for Running; the activity API uses
 # 100 (and 102 Trail, 103 Track). _build_workout_program_payload maps the
@@ -719,6 +773,11 @@ _CYCLING_SPORT_TYPES = frozenset({2, 200, 201})
 # the COROS side. (Strength uses a separate builder and is not listed here.)
 _KNOWN_SPORT_TYPES = _RUNNING_ACTIVITY_SPORT_TYPES | _CYCLING_SPORT_TYPES
 
+# Strength is its own namespace end to end: a separate builder on the write
+# side (_build_strength_program_payload) and a separate parser on the read
+# side (_parse_strength_workout).
+_STRENGTH_SPORT_TYPE = 4
+
 
 def _unscale(value: float | int | None, divisor: int) -> float | int | None:
     """Divide a wire-scaled value back down, returning an int when exact."""
@@ -728,31 +787,49 @@ def _unscale(value: float | int | None, divisor: int) -> float | int | None:
     return int(result) if result.is_integer() else result
 
 
-def _parse_workout(item: dict) -> dict:
-    exercises = []
-    for ex in item.get("exercises", []):
-        parsed = {
-            "name": ex.get("name"),
-            "intensity_low": ex.get("intensityValue"),
-            "intensity_high": ex.get("intensityValueExtend"),
-            "sets": ex.get("sets", 1),
-        }
-        if ex.get("targetType") == 5:
-            # Distance step (see _target_fields): targetValue is meters x100;
-            # intensityMultiplier=1000 means intensity values are scaled x1000.
-            parsed["distance_meters"] = _unscale(ex.get("targetValue"), 100)
-            if ex.get("intensityMultiplier") == 1000:
-                parsed["intensity_low"] = _unscale(parsed["intensity_low"], 1000)
-                parsed["intensity_high"] = _unscale(parsed["intensity_high"], 1000)
-        elif ex.get("targetType") == 1:
-            # Open/manual step (see _target_fields): targetValue=0 means "no
-            # cap", not "zero seconds". Report it as duration_open so a
-            # read-modify-write round trip keeps the open semantics instead of
-            # silently rewriting the step as a 0-second timed one.
-            parsed["duration_open"] = True
-        else:
-            parsed["duration_seconds"] = ex.get("targetValue")
-        exercises.append(parsed)
+def _as_number(value: object) -> float | int | None:
+    """Coerce a wire value to a number, or None if it isn't one.
+
+    The wire types are not what the write side sends: this server sends
+    `intensityDisplayUnit` as a string ("6") and gets an int back, and the
+    numeric intensity fields can arrive as strings too. `_unscale` raises
+    TypeError on a string, so coerce before dividing rather than trusting
+    the type. A non-numeric value (including the "" this server sends for
+    bodyweight) becomes None.
+    """
+    if isinstance(value, bool) or value is None:
+        return None
+    if isinstance(value, (int, float)):
+        return value
+    if isinstance(value, str):
+        try:
+            return float(value) if "." in value else int(value)
+        except ValueError:
+            return None
+    return None
+
+
+# Pounds -> kg factor, the same constant the write side uses.
+_LBS_IN_KG = 0.45359237
+
+
+def _round_exact(value: float, places: int = 2) -> float | int:
+    """Round a derived weight, returning an int when it lands on one.
+
+    A pound weight recovered from its stored kg equivalent misses by a
+    rounding step (42 lbs -> 19051 -> 42.0002), which would otherwise surface
+    as a nonsense precision the athlete never typed.
+    """
+    result = round(value, places)
+    return int(result) if float(result).is_integer() else result
+
+
+def _parse_workout_header(item: dict, exercises: list[dict]) -> dict:
+    """The fields every workout template carries, whatever its namespace.
+
+    Split out so the endurance and strength parsers can share them without
+    sharing a step vocabulary (see the wire encoding table above).
+    """
     # sportType from the workout API is always a wire ID (runs come back as 1,
     # never 100/102/103), so the wire-keyed lookup below is correct here.
     sport = item.get("sportType")
@@ -765,6 +842,224 @@ def _parse_workout(item: dict) -> dict:
         "exercise_count": item.get("exerciseNum", len(exercises)),
         "exercises": exercises,
     }
+
+
+def _parse_exercise(ex: dict, program_sport: int | None) -> dict:
+    """Dispatch one exercise to its namespace's parser.
+
+    Per EXERCISE, not per program: both builders emit `hybridTotalSets`, so
+    the wire format admits mixed programs, and the strength builder stamps
+    `sportType: 4` on every exercise it writes. Dispatching on the program
+    sport alone would mislabel the strength steps of a hybrid template --
+    the same class of bug as GH #60, one sport further along. The program
+    sport is the fallback for exercises that carry no sportType of their own.
+    """
+    sport = ex.get("sportType", program_sport)
+    if sport is None:
+        sport = program_sport
+    if sport == _STRENGTH_SPORT_TYPE:
+        return _parse_strength_exercise(ex)
+    return _parse_endurance_exercise(ex)
+
+
+def _parse_workout(item: dict) -> dict:
+    """Parse an ENDURANCE workout template (run/bike) into step dicts.
+
+    Strength templates (sportType=4) speak a different targetType vocabulary
+    and are handled by _parse_strength_workout. Dispatch happens per
+    EXERCISE, not per program -- see _parse_exercise.
+    """
+    exercises = [_parse_exercise(ex, item.get("sportType")) for ex in item.get("exercises", [])]
+    return _parse_workout_header(item, exercises)
+
+
+def _parse_endurance_exercise(ex: dict) -> dict:
+    """Parse one ENDURANCE step (run/bike) -- see the wire encoding table above."""
+    parsed = {
+        "name": ex.get("name"),
+        "intensity_low": ex.get("intensityValue"),
+        "intensity_high": ex.get("intensityValueExtend"),
+        "sets": ex.get("sets", 1),
+    }
+    if ex.get("targetType") == 5:
+        # Distance step (see _target_fields): targetValue is meters x100;
+        # intensityMultiplier=1000 means intensity values are scaled x1000.
+        parsed["distance_meters"] = _unscale(ex.get("targetValue"), 100)
+        if ex.get("intensityMultiplier") == 1000:
+            parsed["intensity_low"] = _unscale(parsed["intensity_low"], 1000)
+            parsed["intensity_high"] = _unscale(parsed["intensity_high"], 1000)
+    elif ex.get("targetType") == 1:
+        # Open/manual step (see _target_fields): targetValue=0 means "no
+        # cap", not "zero seconds". Report it as duration_open so a
+        # read-modify-write round trip keeps the open semantics instead of
+        # silently rewriting the step as a 0-second timed one.
+        parsed["duration_open"] = True
+    elif ex.get("targetType") == 2 and not ex.get("isGroup"):
+        parsed["duration_seconds"] = ex.get("targetValue")
+    elif ex.get("isGroup"):
+        # Repeat-group header, not a step: `sets` is the repeat count and
+        # targetValue is the iteration length (0 on app-created groups,
+        # which use targetType=0). The sub-steps follow as flat entries
+        # carrying this row's id in their groupId -- this parser does not
+        # nest them.
+        parsed["is_group"] = True
+        parsed["repeat"] = ex.get("sets", 1)
+        parsed.pop("sets", None)
+    else:
+        # Unknown targetType: surface it raw instead of calling it
+        # seconds. The old catch-all `else` here is what made GH #59 and
+        # GH #60 silent -- see the wire encoding table above.
+        parsed["target_type_raw"] = ex.get("targetType")
+        parsed["target_value_raw"] = ex.get("targetValue")
+    group_id = str(ex.get("groupId", "0"))
+    if group_id != "0":
+        parsed["group_id"] = group_id
+    return parsed
+
+
+def _parse_strength_exercise(ex: dict) -> dict:
+    """Parse one strength exercise (sportType=4) -- see the wire encoding table.
+
+    Names are chosen to match what save_strength_workout_template takes as
+    INPUT wherever that is possible today, which is the load axis and the
+    structural fields: origin_id, name, overview, sets, rest_seconds,
+    weight_kg and weight_lbs all round-trip verbatim.
+
+    The TARGET axis does not, and this is deliberately not papered over. The
+    write side takes target_type/target_value (2=seconds, 3=reps) where this
+    emits `reps` / `duration_seconds`, so `reps` here is a BETTER name rather
+    than a matching one -- reporting reps as a duration is the bug this
+    parser exists to fix, and naming it target_value would just re-hide it.
+    Likewise `bodyweight: True` is not an input the write side declares: it
+    spells bodyweight by OMITTING both weight keys, so feeding this key back
+    happens to work only because the builder ignores keys it does not know.
+    And `effort_target` has no write-side input at all.
+
+    So the output of this parser is not yet directly pasteable into
+    save_strength_workout_template. Closing that gap means teaching the write
+    tools these names (with target_type/target_value kept as aliases) and is
+    tracked as its own change -- see the follow-up issue referenced in the
+    GH #60 PR. Endurance is already off in the same way: read emits
+    duration_seconds, write takes duration_minutes.
+
+    Notably absent: intensity_low/intensity_high. The strength namespace puts
+    weight in the intensity fields, so those endurance names would carry a raw
+    wire number here (27900 for 27.9 kg) -- omitting them is more honest than
+    surfacing that.
+    """
+    parsed: dict = {
+        "name": ex.get("name"),
+        "origin_id": str(ex["originId"]) if ex.get("originId") is not None else None,
+        "overview": ex.get("overview"),
+        "sets": ex.get("sets", 1),
+    }
+
+    target_type = ex.get("targetType")
+    if target_type == 3:
+        parsed["reps"] = ex.get("targetValue")
+    elif target_type == 2:
+        parsed["duration_seconds"] = ex.get("targetValue")
+    else:
+        parsed["target_type_raw"] = target_type
+        parsed["target_value_raw"] = ex.get("targetValue")
+
+    # Rest encoding mirrors the write side: restType=3 is "Skip rests" (the
+    # app's wording) and carries no value; restType=1 holds the seconds.
+    rest_type = ex.get("restType")
+    if rest_type == 1:
+        parsed["rest_seconds"] = ex.get("restValue", 0)
+    elif rest_type == 3:
+        parsed["rest_seconds"] = 0
+    else:
+        parsed["rest_type_raw"] = rest_type
+        parsed["rest_value_raw"] = ex.get("restValue")
+
+    # Weight. intensityDisplayUnit is the discriminator: 6=kg, 7=lbs, 0=no
+    # unit (bodyweight). Note the read side returns it as an INT while the
+    # write side sends it as a STRING ("6"/"7"), hence the str() coercion.
+    #
+    # intensityCustom=1 is the bodyweight marker, in the app's own data as
+    # well as this server's -- only the companion value differs (the app
+    # sends 0, this server sends ""). It is the ONLY reliable discriminator:
+    # a 0.0 kg exercise is also value=0, and differs solely by custom=0.
+    # Verified 2026-09-09 by flipping one exercise from its 0.0 kg default to
+    # Bodyweight in the app and re-reading: intensityCustom 0 -> 1 was the
+    # entire diff.
+    display_unit = str(ex.get("intensityDisplayUnit", ""))
+    # Coerce before dividing: these arrive as ints from the app and as
+    # strings from some server paths (see _as_number).
+    raw_value = ex.get("intensityValue")
+    value = _as_number(raw_value)
+    # Only the two CONFIRMED spellings of "no weight" count as bodyweight:
+    # the app sends 0 with intensityCustom=1, this server sends "". A value
+    # that is merely unparseable is unknown, not bodyweight -- it falls
+    # through to the raw branch rather than being guessed at.
+    if ex.get("intensityCustom") == 1 or raw_value in ("", None):
+        # A null or empty weight is no weight, which is exactly what
+        # bodyweight means to the write side (it spells bodyweight by
+        # omitting the key). The "" this server sends comes back as None,
+        # so both spellings have to land here.
+        parsed["bodyweight"] = True
+    elif value is None:
+        # Non-numeric and not one of the bodyweight spellings: unknown.
+        parsed["intensity_value_raw"] = raw_value
+        parsed["intensity_display_unit_raw"] = ex.get("intensityDisplayUnit")
+    elif display_unit == "6" or (display_unit == "0" and not value):
+        # kg. displayUnit 0 with no value is the app's untouched default,
+        # which it still renders as "0.0 kg" -- report the zero rather than
+        # omitting the key, or rewriting the template would turn it into a
+        # bodyweight exercise (an omitted weight is how the write side spells
+        # bodyweight).
+        parsed["weight_kg"] = _unscale(value, 1000)
+    elif display_unit == "0":
+        # No weight unit but a value: the app's EFFORT target, a 1-10 RPE
+        # scale it labels in words (1 minimum, 2 very easy, ... 5 moderate,
+        # 8 very hard, 9 near max, 10 max). Confirmed 2026-09-09 against a
+        # timed burpee showing "Target 5, Moderate" with intensityValue=5 --
+        # unscaled, unlike every weight in this field.
+        #
+        # NOTE: save_strength_workout_template has no input for this, so an
+        # effort target survives a read but cannot yet be written back.
+        parsed["effort_target"] = value
+    elif display_unit == "7":
+        # lbs. intensityValue always holds the kg equivalent; intensityPercent
+        # holds the typed pounds (lbs x 1e6) but ONLY on templates this server
+        # wrote -- a real app-created lbs exercise comes back with
+        # intensityPercent=0, so derive from the kg equivalent when it is
+        # missing. Reporting kg here instead would silently flip the
+        # athlete's unit on a read-modify-write.
+        percent = _as_number(ex.get("intensityPercent")) or 0
+        if percent:
+            parsed["weight_lbs"] = _unscale(percent, 1_000_000)
+        else:
+            parsed["weight_lbs"] = _round_exact((value or 0) / 1000 / _LBS_IN_KG)
+    else:
+        # Unrecognized unit: same principle as an unknown targetType -- show
+        # it rather than guess a scale for it.
+        parsed["intensity_value_raw"] = ex.get("intensityValue")
+        parsed["intensity_display_unit_raw"] = ex.get("intensityDisplayUnit")
+
+    return parsed
+
+
+def _parse_strength_workout(item: dict) -> dict:
+    """Parse a STRENGTH workout template (sportType=4).
+
+    Separate from _parse_workout because the two namespaces share only the
+    header: targetType means something different in each (reps vs distance),
+    and strength carries weight where endurance carries intensity bounds.
+    """
+    exercises = [_parse_exercise(ex, item.get("sportType")) for ex in item.get("exercises", [])]
+    parsed = _parse_workout_header(item, exercises)
+    # Circuit rounds: the whole exercise list repeats `sets` times. Endurance
+    # templates have no equivalent, so it lives here rather than in the header.
+    # App-created templates send sets=null (they express repetition per
+    # exercise instead), so normalize that to a single round. `totalSets` is
+    # deliberately not surfaced: this server writes it as the circuit count
+    # while the app returns the summed per-exercise sets, so the two disagree.
+    parsed["sets"] = item.get("sets") or 1
+    parsed["total_duration_seconds"] = item.get("duration")
+    return parsed
 
 
 async def fetch_workout_templates(auth: StoredAuth) -> list[dict]:
@@ -780,7 +1075,15 @@ async def fetch_workout_templates(auth: StoredAuth) -> list[dict]:
 
     _check_response(body, "workout list")
 
-    return [_parse_workout(w) for w in body.get("data", [])]
+    # The program sportType picks the HEADER shape (strength adds circuit
+    # rounds and a total duration). The step vocabulary is chosen per
+    # exercise inside both parsers -- see _parse_exercise -- so a hybrid
+    # template's strength steps stay correctly parsed either way.
+    return [
+        _parse_strength_workout(w) if w.get("sportType") == _STRENGTH_SPORT_TYPE
+        else _parse_workout(w)
+        for w in body.get("data", [])
+    ]
 
 
 def _parse_training_plan(item: dict) -> dict:
@@ -876,6 +1179,10 @@ def _build_workout_program_payload(
     def _target_fields(s: dict) -> dict:
         """Return the targetType/targetValue/intensityMultiplier fields for a
         step, plus its intensity values scaled to match.
+
+        The endurance column of the WIRE ENCODING TABLE at the top of this
+        section is the source of truth for the targetType values below; keep
+        the two in sync.
 
         Three mutually exclusive duration keys are supported:
           - duration_minutes: time-based (targetType=2, seconds, intensity
@@ -1339,13 +1646,19 @@ def apply_workout_calculation(program: dict, calculation: dict) -> dict:
     return updated
 
 
+# Kept deliberately: originId, intensityCustom, intensityDisplayUnit and
+# isIntensityPercent used to be dropped here as noise. They are the semantic
+# core of the strength read path -- originId is what makes a template
+# rewritable at all, and the other three are the only things separating a
+# weight from a bodyweight marker from an effort target (see
+# _parse_strength_exercise). A raw view that hides the fields the parsed view
+# decodes is useless for debugging exactly the cases you would reach for it.
 _EXERCISE_DROP = frozenset({
     "videoInfos", "videoUrl", "videoUrlArrStr", "coverUrlArrStr",
     "thumbnailUrl", "sourceUrl", "animationId",
     "access", "deleted", "defaultOrder", "status", "createTimestamp",
     "userId", "muscle", "muscleRelevance", "part", "equipment",
-    "sortNo", "originId", "isDefaultAdd", "intensityCustom",
-    "intensityDisplayUnit", "isIntensityPercent",
+    "sortNo", "isDefaultAdd",
 })
 
 _PROGRAM_DROP = frozenset({
