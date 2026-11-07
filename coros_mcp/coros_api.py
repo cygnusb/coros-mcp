@@ -1486,7 +1486,7 @@ def _build_strength_program_payload(
     /training/program/add accepts and that schedule/update accepts inline.
 
     by_id is the catalog lookup ({id: catalog_entry}) used to populate per-
-    exercise muscle/part/equipment metadata and animationId (video guidance),
+    exercise muscle/part/equipment metadata, access and animationId (video guidance),
     and name/overview when the caller omits them (built-ins carry a T-code
     name and sid_ overview; custom exercises a display name and their
     free-text description, possibly "").
@@ -1577,7 +1577,7 @@ def _build_strength_program_payload(
         equipment = cat.get("equipment") or []
         animation_id = cat.get("animationId", 0)
 
-        built.append({
+        entry = {
             "animationId": animation_id,
             "exerciseKind": 0,
             "exerciseType": 2,
@@ -1614,7 +1614,12 @@ def _build_strength_program_payload(
             "targetDisplayUnit": 0,
             "targetType": ex["target_type"],
             "targetValue": target_value,
-        })
+        }
+        # access marks the exercise's origin (0 = built-in, 1 = custom). A
+        # workout with a custom exercise showed wrongly in the app without it.
+        if "access" in cat:
+            entry["access"] = cat["access"]
+        built.append(entry)
 
     total_duration *= sets
     payload = {

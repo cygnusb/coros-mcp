@@ -113,4 +113,4 @@ These match the codes on built-in exercises (e.g. Arnold press `part [1]`, `musc
 
 ## Using custom exercises in workouts
 
-Strength workouts (`/training/program/add`, inline `/training/schedule/update`) reference an exercise by `originId` = its `id`. For a custom exercise, `name` is its display name and `overview` is its description (`""` if it has none); built-ins use the T-code and `sid_strength_*` key.
+Strength workouts (`/training/program/add`, inline `/training/schedule/update`) reference an exercise by `originId` = its `id`. For a custom exercise, `name` is its display name and `overview` is its description (`""` if it has none); built-ins use the T-code and `sid_strength_*` key. Each workout exercise also carries the exercise's `access` (`1` for custom, `0` for built-in): a workout with a custom exercise showed wrongly in the app when it was missing.

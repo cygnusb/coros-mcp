@@ -36,6 +36,7 @@ BUILTIN = {
     "muscleRelevance": [1], "equipment": [1], "sportType": 4, "exerciseType": 2,
     "targetType": 3, "targetValue": 15, "restType": 1, "restValue": 30, "animationId": 46,
 }
+BUILTIN_WITH_ACCESS = {**BUILTIN, "id": "425827615547506689", "access": 0}
 CUSTOM = {
     "id": "100000000000000001", "userId": 400000000000000001, "name": "Monster Walk",
     "overview": "", "part": [5], "muscle": [14, 10], "muscleRelevance": [7, 15],
@@ -362,6 +363,19 @@ def test_strength_payload_carries_custom_description():
         "w", [_strength_exercise(origin_id=CUSTOM_DESCRIBED["id"])], by_id
     )["exercises"][0]
     assert (ex["name"], ex["overview"]) == ("Copenhagen Plank", CUSTOM_DESCRIBED["overview"])
+
+
+def test_strength_payload_copies_access_from_catalogue():
+    by_id = {CUSTOM["id"]: CUSTOM, BUILTIN_WITH_ACCESS["id"]: BUILTIN_WITH_ACCESS}
+    exercises = _build_strength_program_payload(
+        "w", [_strength_exercise(), _strength_exercise(origin_id=BUILTIN_WITH_ACCESS["id"])], by_id
+    )["exercises"]
+    assert [ex["access"] for ex in exercises] == [1, 0]
+
+
+def test_strength_payload_catalogue_miss_omits_access():
+    ex = _build_strength_program_payload("w", [_strength_exercise()], {})["exercises"][0]
+    assert "access" not in ex
 
 
 def test_strength_payload_builtin_fallback_from_catalogue():
