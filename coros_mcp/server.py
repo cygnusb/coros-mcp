@@ -313,6 +313,9 @@ _TOOL_DESCRIPTIONS = [
     {"name": "schedule_workout_template", "description": "Schedule an existing library workout template on a specific date"},  # noqa: E501
     {"name": "remove_scheduled_workout", "description": "Remove a workout from the training calendar"},
     {"name": "list_exercises", "description": "List available strength exercises (used when building strength workouts)"},  # noqa: E501
+    {"name": "create_custom_exercise", "description": "Create a custom strength exercise (name, body part, muscles, equipment)"},  # noqa: E501
+    {"name": "update_custom_exercise", "description": "Change fields of a custom strength exercise (built-ins are refused)"},  # noqa: E501
+    {"name": "delete_custom_exercise", "description": "Delete custom strength exercises (confirm with the user first)"},  # noqa: E501
     {"name": "sync_coros_data", "description": "Backfill local cache from the Coros API for a date range"},
     {"name": "get_cache_status", "description": "Show local cache coverage: date ranges stored for each data type"},  # noqa: E501
 ]
@@ -1416,7 +1419,9 @@ async def schedule_strength_workout(
     exercises : list[dict]
         Same shape as save_strength_workout_template (origin_id, name, overview,
         target_type, target_value, rest_seconds, optional weight_kg or
-        weight_lbs, optional per-exercise sets).
+        weight_lbs, optional per-exercise sets). Custom exercises work too:
+        use the workout_exercise returned by create_custom_exercise, or
+        origin_id from list_exercises(custom_only=True).
     happen_day : str
         Date in YYYYMMDD format.
     sets : int
@@ -1536,8 +1541,14 @@ async def save_strength_workout_template(
         Workout name.
     exercises : list of dicts, each with:
         - origin_id (str): exercise catalogue ID from list_exercises
-        - name (str): T-code name (e.g. "T1061")
-        - overview (str): sid_ key (e.g. "sid_strength_squats")
+          (built-in or custom)
+        - name (str): T-code name for a built-in (e.g. "T1061"), or the
+          display name for a custom exercise. Optional — defaults to the
+          catalogue entry's name.
+        - overview (str): sid_ key for a built-in (e.g.
+          "sid_strength_squats"), or the description ("" if none) for a
+          custom exercise. Optional — defaults to the catalogue entry's
+          overview.
         - target_type (int): 2=time in seconds, 3=reps
         - target_value (int): number of seconds or reps
         - rest_seconds (int): rest after this exercise (default 60).
@@ -1592,17 +1603,26 @@ async def save_strength_workout_template(
 # ---------------------------------------------------------------------------
 
 @_tool(annotations=_READ)
-async def list_exercises(sport_type: int = 4) -> dict:
+async def list_exercises(sport_type: int = 4, custom_only: bool = False) -> dict:
     """
     List the exercise catalogue for a given sport type.
 
     Useful for resolving strength/conditioning exercises (sport_type=4)
     that appear in planned workouts by name and ID.
 
+    Built-in exercises have userId 0, a T-code name (e.g. "T1061") and a
+    sid_ overview. Custom exercises (created by the user) have a non-zero
+    userId, their display name as name, and their description (often
+    empty) as overview.
+
     Parameters
     ----------
     sport_type : int
         Sport type ID. Default 4 = Strength.
+    custom_only : bool
+        Return only the user's custom exercises (default False). The full
+        strength catalogue is several hundred entries — use this to find
+        exercise ids for update_custom_exercise / delete_custom_exercise.
 
     Returns
     -------
@@ -1613,9 +1633,238 @@ async def list_exercises(sport_type: int = 4) -> dict:
         return {"error": _NOT_AUTHENTICATED, "exercises": []}
     try:
         items = await _run_with_auth(coros_api.fetch_exercises, auth, sport_type)
+        if custom_only:
+            items = [e for e in items if coros_api._is_custom_exercise(e)]
         return {"exercises": items, "count": len(items), "sport_type": sport_type}
     except Exception as exc:
         return {"error": str(exc), "exercises": []}
+
+
+# ---------------------------------------------------------------------------
+# Tools: custom strength exercises
+# ---------------------------------------------------------------------------
+
+_ExerciseCodes = list[str | int]
+_TARGET_TYPES = {"reps": 3, "time": 2}
+
+
+def _exercise_summary(exercise: dict) -> dict:
+    """Compact, readable view of an exercise object. Only a custom exercise's
+    overview is a description — a built-in's is a sid_ i18n key."""
+    return {
+        "exercise_id": str(exercise.get("id", "")),
+        "name": exercise.get("name", ""),
+        "description": exercise.get("overview", "") if coros_api._is_custom_exercise(exercise) else "",
+        "part": coros_api.exercise_code_labels(exercise.get("part"), coros_api.EXERCISE_PARTS),
+        "muscle": coros_api.exercise_code_labels(exercise.get("muscle"), coros_api.EXERCISE_MUSCLES),
+        "muscle_relevance": coros_api.exercise_code_labels(
+            exercise.get("muscleRelevance"), coros_api.EXERCISE_MUSCLES
+        ),
+        "equipment": coros_api.exercise_code_labels(exercise.get("equipment"), coros_api.EXERCISE_EQUIPMENT),
+        "target_type": "time" if exercise.get("targetType") == 2 else "reps",
+        "target_value": exercise.get("targetValue"),
+        "rest_seconds": exercise.get("restValue"),
+    }
+
+
+def _workout_exercise(exercise: dict) -> dict:
+    """Ready-to-use entry for the `exercises` list of
+    schedule_strength_workout / save_strength_workout_template. A custom
+    exercise's overview is its description, which workouts carry along."""
+    return {
+        "origin_id": str(exercise.get("id", "")),
+        "name": exercise.get("name", ""),
+        "overview": exercise.get("overview", ""),
+        "target_type": exercise.get("targetType", 3),
+        "target_value": exercise.get("targetValue", 15),
+        "rest_seconds": exercise.get("restValue", 30),
+    }
+
+
+@_tool(write=True, annotations=_WRITE)
+async def create_custom_exercise(
+    name: str,
+    part: _ExerciseCodes,
+    muscle: _ExerciseCodes | None = None,
+    equipment: _ExerciseCodes | None = None,
+    muscle_relevance: _ExerciseCodes | None = None,
+    target_type: Literal["reps", "time"] = "reps",
+    target_value: Annotated[int, Field(ge=1)] = 15,
+    rest_seconds: Annotated[int, Field(ge=0)] = 30,
+    description: str = "",
+) -> dict:
+    """
+    Create a CUSTOM strength exercise in the user's COROS exercise library.
+
+    Use this only when the exercise the user wants is not in the built-in
+    catalogue (check list_exercises first — it has several hundred
+    exercises). Creating an exercise that already exists leaves a duplicate.
+
+    part / muscle / muscle_relevance / equipment each take a list of labels
+    (case-insensitive) or numeric codes:
+      part:      0=Whole Body, 1=Shoulders, 2=Chest, 3=Back, 4=Core,
+                 5=Legs/Hips, 6=Arms
+      muscle / muscle_relevance:
+                 1=Deltoids, 2=Chest, 3=Biceps, 4=Triceps, 5=Forearms, 6=Abs,
+                 7=Quadriceps, 8=Posterior Thigh, 9=Adductor, 10=Abductor,
+                 11=Trapezius, 12=Latissimus Dorsi, 13=Erector Spinae,
+                 14=Glutes, 15=Calves
+      equipment: 1=Bodyweight, 2=Dumbbells, 3=Barbells, 4=Barbell Plates,
+                 5=Ropes, 6=Gym Equipment, 7=Exercise Ball, 8=Bosu Ball,
+                 9=Bands, 10=Medicine Ball, 11=Kettlebell, 12=Hangboard,
+                 13=Indoor Rower, 16=Others
+
+    Parameters
+    ----------
+    name : str
+        Display name, e.g. "Seated DB Shoulder Press".
+    part : list
+        Body part(s) trained. Required. Whole Body also requires muscle.
+    muscle : list
+        Primary muscle(s).
+    equipment : list
+        Equipment used.
+    muscle_relevance : list
+        Secondary muscle(s), same codes as muscle.
+    target_type : "reps" | "time"
+        Default target kind when the exercise is added to a workout.
+    target_value : int
+        Default reps, or seconds for target_type "time" (default 15).
+    rest_seconds : int
+        Default rest after the exercise (default 30).
+    description : str
+        Optional free-text description (e.g. setup or form cues), shown
+        in Training Hub.
+
+    Returns
+    -------
+    dict with keys: created, exercise (readable summary incl. exercise_id),
+    workout_exercise (an entry to put in the `exercises` list of
+    schedule_strength_workout / save_strength_workout_template — add sets
+    and weight_kg / weight_lbs as needed), message
+    """
+    auth = await _get_auth()
+    if auth is None:
+        return {"error": _NOT_AUTHENTICATED}
+    try:
+        exercise = await _run_with_auth(
+            coros_api.create_custom_exercise,
+            auth,
+            name,
+            part,
+            muscle,
+            equipment,
+            muscle_relevance,
+            _TARGET_TYPES[target_type],
+            target_value,
+            rest_seconds,
+            description,
+            retry_all=False,
+        )
+        return {
+            "created": True,
+            "exercise": _exercise_summary(exercise),
+            "workout_exercise": _workout_exercise(exercise),
+            "message": "Custom exercise created.",
+        }
+    except Exception as exc:
+        return {"error": str(exc), "created": False}
+
+
+@_tool(write=True, annotations=_DESTRUCTIVE)
+async def update_custom_exercise(
+    exercise_id: str,
+    name: str | None = None,
+    part: _ExerciseCodes | None = None,
+    muscle: _ExerciseCodes | None = None,
+    equipment: _ExerciseCodes | None = None,
+    muscle_relevance: _ExerciseCodes | None = None,
+    target_type: Literal["reps", "time"] | None = None,
+    target_value: Annotated[int, Field(ge=1)] | None = None,
+    rest_seconds: Annotated[int, Field(ge=0)] | None = None,
+    description: str | None = None,
+) -> dict:
+    """
+    Update a CUSTOM strength exercise. Only the fields you pass change;
+    omitted fields keep their current value. A list field you pass replaces
+    the whole list (pass [] to clear it); pass description="" to clear the
+    description.
+
+    Built-in COROS exercises cannot be changed — the tool refuses them.
+    Find exercise ids with list_exercises(custom_only=True).
+
+    Labels / codes for part, muscle, muscle_relevance and equipment, and the
+    meaning of every other field, are the same as for create_custom_exercise.
+
+    Workouts already saved or scheduled keep their own copy of the
+    exercise; the change applies to workouts built afterwards.
+
+    Returns
+    -------
+    dict with keys: updated, exercise (readable summary), workout_exercise
+    """
+    auth = await _get_auth()
+    if auth is None:
+        return {"error": _NOT_AUTHENTICATED}
+    try:
+        exercise = await _run_with_auth(
+            coros_api.update_custom_exercise,
+            auth,
+            exercise_id,
+            name=name,
+            part=part,
+            muscle=muscle,
+            equipment=equipment,
+            muscle_relevance=muscle_relevance,
+            target_type=_TARGET_TYPES[target_type] if target_type else None,
+            target_value=target_value,
+            rest_seconds=rest_seconds,
+            description=description,
+        )
+        return {
+            "updated": True,
+            "exercise": _exercise_summary(exercise),
+            "workout_exercise": _workout_exercise(exercise),
+        }
+    except Exception as exc:
+        return {"error": str(exc), "updated": False}
+
+
+@_tool(write=True, annotations=_DESTRUCTIVE)
+async def delete_custom_exercise(exercise_ids: Annotated[list[str], Field(min_length=1)]) -> dict:
+    """
+    Permanently delete one or more CUSTOM strength exercises.
+
+    ⚠️ Irreversible. Before calling, show the user the exercise name(s) and
+    id(s) you are about to delete and get their explicit confirmation.
+    Never delete without it.
+
+    Built-in COROS exercises cannot be deleted — the tool refuses them. All
+    ids are checked first; if any is unknown or built-in, nothing is
+    deleted. Find ids with list_exercises(custom_only=True).
+
+    Parameters
+    ----------
+    exercise_ids : list[str]
+        Ids of the custom exercises to delete.
+
+    Returns
+    -------
+    dict with keys: deleted, exercises (id + name of each deleted exercise)
+    """
+    auth = await _get_auth()
+    if auth is None:
+        return {"error": _NOT_AUTHENTICATED}
+    try:
+        deleted = await _run_with_auth(
+            coros_api.delete_custom_exercises, auth, exercise_ids, retry_all=False
+        )
+        return {
+            "deleted": True,
+            "exercises": [{"exercise_id": str(e.get("id", "")), "name": e.get("name", "")} for e in deleted],
+        }
+    except Exception as exc:
+        return {"error": str(exc), "deleted": False}
 
 
 # ---------------------------------------------------------------------------
