@@ -58,6 +58,9 @@ ENDPOINTS = {
     "schedule": "/training/schedule/query",         # GET — planned calendar detail
     "schedule_update": "/training/schedule/update", # POST — add workout to calendar
     "exercises": "/training/exercise/query",        # GET — exercise catalogue by sport type
+    "exercise_add": "/training/exercise/add",       # POST — create custom strength exercise
+    "exercise_update": "/training/exercise/update", # POST — full exercise object incl. id
+    "exercise_delete": "/training/exercise/delete", # POST — body: ["id1", ...]
 }
 
 # Login works on teamapi.coros.com but tokens are only valid on the
@@ -1415,9 +1418,10 @@ _LB_TO_KG = 0.45359237
 
 
 # Module-level cache for the strength-exercise catalog. The MCP server is
-# long-lived and the Coros catalog is effectively static within a session.
+# long-lived and the built-in catalog is effectively static within a session.
 # 1h TTL balances "session never refetches" with "long-running server
-# eventually picks up catalog additions if they ever happen".
+# eventually picks up catalog additions if they ever happen". Custom-exercise
+# writes made through this server reset the cache immediately.
 # Cache is process-global (not region/auth-scoped) — catalog IDs are global
 # across Coros regions, and the MCP server is single-user in practice.
 _STRENGTH_CATALOG_TTL_SECONDS = 3600
@@ -1427,10 +1431,9 @@ _strength_catalog_lock = asyncio.Lock()
 
 
 def _reset_strength_catalog_cache() -> None:
-    """Test-only helper: clear the module-level strength-catalog cache so
-    the next call to _load_strength_catalog refetches. Not part of the
-    public API — production code has no reason to invalidate the cache
-    (process restart is the supported way to pick up catalog changes)."""
+    """Clear the module-level strength-catalog cache so the next call to
+    _load_strength_catalog refetches. Called after custom-exercise writes so
+    a just-created exercise gets its metadata in the next strength workout."""
     global _strength_catalog_cache, _strength_catalog_loaded_at
     _strength_catalog_cache = None
     _strength_catalog_loaded_at = 0.0
@@ -1483,7 +1486,10 @@ def _build_strength_program_payload(
     /training/program/add accepts and that schedule/update accepts inline.
 
     by_id is the catalog lookup ({id: catalog_entry}) used to populate per-
-    exercise muscle/part/equipment metadata and animationId (video guidance).
+    exercise muscle/part/equipment metadata, access and animationId (video guidance),
+    and name/overview when the caller omits them (built-ins carry a T-code
+    name and sid_ overview; custom exercises a display name and their
+    free-text description, possibly "").
     Pass {} to skip catalog enrichment.
 
     Validation (raises ValueError):
@@ -1571,7 +1577,7 @@ def _build_strength_program_payload(
         equipment = cat.get("equipment") or []
         animation_id = cat.get("animationId", 0)
 
-        built.append({
+        entry = {
             "animationId": animation_id,
             "exerciseKind": 0,
             "exerciseType": 2,
@@ -1591,10 +1597,10 @@ def _build_strength_program_payload(
             "isIntensityPercent": False,
             "muscle": muscle,
             "muscleRelevance": muscle_relevance,
-            "name": ex.get("name", ""),
+            "name": ex.get("name", cat.get("name", "")),
             "onsightGradeOffset": 0,
             "originId": ex["origin_id"],
-            "overview": ex.get("overview", "sid_strength_training"),
+            "overview": ex.get("overview", cat.get("overview", "sid_strength_training")),
             "part": part,
             "equipment": equipment,
             "packageTime": 0,
@@ -1608,7 +1614,12 @@ def _build_strength_program_payload(
             "targetDisplayUnit": 0,
             "targetType": ex["target_type"],
             "targetValue": target_value,
-        })
+        }
+        # access marks the exercise's origin (0 = built-in, 1 = custom). A
+        # workout with a custom exercise showed wrongly in the app without it.
+        if "access" in cat:
+            entry["access"] = cat["access"]
+        built.append(entry)
 
     total_duration *= sets
     payload = {
@@ -1649,8 +1660,11 @@ async def save_strength_workout_template(
 
     exercises: list of dicts with keys:
       - origin_id: str  — exercise catalogue ID (from list_exercises)
-      - name: str       — T-code name (e.g. "T1061")
-      - overview: str   — sid_ key (e.g. "sid_strength_squats")
+      - name: str       — T-code name (e.g. "T1061"), or the display name for
+        a custom exercise. Optional: defaults to the catalogue entry's name.
+      - overview: str   — sid_ key (e.g. "sid_strength_squats"), or the
+        description ("" if none) for a custom exercise. Optional: defaults to
+        the catalogue entry's overview.
       - target_type: int — 2=time (seconds), 3=reps
       - target_value: int — seconds or reps
       - rest_seconds: int — rest after this exercise. 0 → "Skip rests".
@@ -1983,6 +1997,294 @@ async def fetch_exercises(auth: StoredAuth, sport_type: int) -> list[dict]:
     _check_response(body, "exercise list")
 
     return body.get("data", []) or []
+
+
+# ---------------------------------------------------------------------------
+# Custom strength exercises (create / update / delete)
+# ---------------------------------------------------------------------------
+
+# Code → English label for an exercise's part / muscle / muscleRelevance /
+# equipment arrays. Source: the Training Hub's public dictionary
+# static.coros.com/coros-traininghub-v2/static/profile/activitySourceDataProfile_prod.json
+# (entry subDataType=20, fileVersion 1700633355), labels resolved through the
+# en-US locale (static.coros.com/locale/coros-traininghub-v2/en-US.prod.js).
+# muscleRelevance (secondary muscles) uses the muscle codes.
+EXERCISE_PARTS = {
+    0: "Whole Body", 1: "Shoulders", 2: "Chest", 3: "Back", 4: "Core",
+    5: "Legs/Hips", 6: "Arms",
+}
+EXERCISE_MUSCLES = {
+    1: "Deltoids", 2: "Chest", 3: "Biceps", 4: "Triceps", 5: "Forearms",
+    6: "Abs", 7: "Quadriceps", 8: "Posterior Thigh", 9: "Adductor",
+    10: "Abductor", 11: "Trapezius", 12: "Latissimus Dorsi",
+    13: "Erector Spinae", 14: "Glutes", 15: "Calves",
+}
+EXERCISE_EQUIPMENT = {
+    1: "Bodyweight", 2: "Dumbbells", 3: "Barbells", 4: "Barbell Plates",
+    5: "Ropes", 6: "Gym Equipment", 7: "Exercise Ball", 8: "Bosu Ball",
+    9: "Bands", 10: "Medicine Ball", 11: "Kettlebell", 12: "Hangboard",
+    13: "Indoor Rower", 16: "Others",
+}
+
+_WHOLE_BODY = 0
+
+# Fields the Training Hub form merges into a NEW exercise before posting.
+_NEW_EXERCISE_DEFAULTS = {
+    "access": 1, "intensityCustom": 0, "intensityMultiplier": 0, "intensityType": 1,
+    "intensityValue": 0, "intensityValueExtend": 0,
+}
+
+
+def resolve_exercise_codes(
+    values: list[str | int] | str | int | None,
+    table: dict[int, str],
+    field: str,
+) -> list[int]:
+    """Map labels (case-insensitive) or numeric codes to a deduplicated list
+    of codes. Raises ValueError naming the valid options on an unknown value."""
+    if values is None:
+        return []
+    if not isinstance(values, list):
+        values = [values]
+    by_label = {label.lower(): code for code, label in table.items()}
+    codes: list[int] = []
+    for v in values:
+        code: int | None
+        if isinstance(v, int) or (isinstance(v, str) and v.strip().isdigit()):
+            code = int(v)
+            if code not in table:
+                code = None
+        else:
+            code = by_label.get(str(v).strip().lower())
+        if code is None:
+            options = ", ".join(f"{c}={label}" for c, label in table.items())
+            raise ValueError(f"unknown {field} {v!r} — valid: {options}")
+        if code not in codes:
+            codes.append(code)
+    return codes
+
+
+def exercise_code_labels(codes: list[int] | None, table: dict[int, str]) -> list[str]:
+    """Codes → labels; unknown codes are kept as their string form."""
+    return [table.get(c, str(c)) for c in codes or []]
+
+
+def _is_custom_exercise(exercise: dict) -> bool:
+    """Custom exercises carry the owner's userId; built-ins have userId 0."""
+    return str(exercise.get("userId") or 0) != "0"
+
+
+def _validate_exercise(exercise: dict) -> None:
+    """Mirror the Training Hub form: name and part are required, and a
+    Whole Body exercise must name at least one muscle."""
+    if not str(exercise.get("name", "")).strip():
+        raise ValueError("custom exercise requires a name")
+    if not exercise.get("part"):
+        raise ValueError("custom exercise requires at least one part")
+    if _WHOLE_BODY in exercise["part"] and not exercise.get("muscle"):
+        raise ValueError("a Whole Body exercise requires at least one muscle")
+    if exercise.get("targetType") not in (2, 3):
+        raise ValueError(f"target_type must be 2 (time) or 3 (reps), got {exercise.get('targetType')!r}")
+    if int(exercise.get("targetValue", 0)) <= 0:
+        raise ValueError(f"target_value must be positive, got {exercise.get('targetValue')!r}")
+    if int(exercise.get("restValue", 0)) < 0:
+        raise ValueError(f"rest_seconds must be non-negative, got {exercise.get('restValue')!r}")
+
+
+def _build_custom_exercise_payload(
+    name: str,
+    part: list[str | int] | str | int,
+    muscle: list[str | int] | str | int | None = None,
+    equipment: list[str | int] | str | int | None = None,
+    muscle_relevance: list[str | int] | str | int | None = None,
+    target_type: int = 3,
+    target_value: int = 15,
+    rest_seconds: int = 30,
+    description: str = "",
+) -> dict:
+    """Body for /training/exercise/add, as the Training Hub form builds it.
+    description goes into overview, which holds free text for custom
+    exercises (built-ins use it for a sid_ i18n key)."""
+    payload = {
+        "sportType": 4,
+        "exerciseType": 2,
+        "name": name.strip(),
+        "overview": description,
+        "part": resolve_exercise_codes(part, EXERCISE_PARTS, "part"),
+        "muscle": resolve_exercise_codes(muscle, EXERCISE_MUSCLES, "muscle"),
+        "muscleRelevance": resolve_exercise_codes(muscle_relevance, EXERCISE_MUSCLES, "muscle_relevance"),
+        "equipment": resolve_exercise_codes(equipment, EXERCISE_EQUIPMENT, "equipment"),
+        **_NEW_EXERCISE_DEFAULTS,
+        "restType": 1,
+        "restValue": rest_seconds,
+        "targetType": target_type,
+        "targetValue": target_value,
+    }
+    _validate_exercise(payload)
+    return payload
+
+
+def _apply_custom_exercise_changes(
+    current: dict,
+    *,
+    name: str | None = None,
+    part: list[str | int] | str | int | None = None,
+    muscle: list[str | int] | str | int | None = None,
+    equipment: list[str | int] | str | int | None = None,
+    muscle_relevance: list[str | int] | str | int | None = None,
+    target_type: int | None = None,
+    target_value: int | None = None,
+    rest_seconds: int | None = None,
+    description: str | None = None,
+) -> dict:
+    """Body for /training/exercise/update: the full current object with the
+    given fields replaced (None = unchanged). userId is dropped, as the
+    Training Hub does — it is a 64-bit number its JS client can't round-trip."""
+    if not _is_custom_exercise(current):
+        raise ValueError(
+            f"exercise {current.get('id')} is a built-in COROS exercise — only custom exercises can be changed"
+        )
+    payload = {k: v for k, v in current.items() if k != "userId"}
+    for key in ("part", "muscle", "muscleRelevance", "equipment"):
+        payload[key] = payload.get(key) or []
+    if name is not None:
+        payload["name"] = name.strip()
+    if description is not None:
+        payload["overview"] = description
+    if part is not None:
+        payload["part"] = resolve_exercise_codes(part, EXERCISE_PARTS, "part")
+    if muscle is not None:
+        payload["muscle"] = resolve_exercise_codes(muscle, EXERCISE_MUSCLES, "muscle")
+    if muscle_relevance is not None:
+        payload["muscleRelevance"] = resolve_exercise_codes(muscle_relevance, EXERCISE_MUSCLES, "muscle_relevance")
+    if equipment is not None:
+        payload["equipment"] = resolve_exercise_codes(equipment, EXERCISE_EQUIPMENT, "equipment")
+    if target_type is not None:
+        payload["targetType"] = target_type
+    if target_value is not None:
+        payload["targetValue"] = target_value
+    if rest_seconds is not None:
+        payload["restType"] = 1
+        payload["restValue"] = rest_seconds
+    _validate_exercise(payload)
+    return payload
+
+
+async def _fetch_custom_exercises_by_id(auth: StoredAuth, exercise_ids: list[str]) -> list[dict]:
+    """Look up exercises by id in the strength catalogue. Raises ValueError if
+    any id is missing or names a built-in, so callers never touch built-ins."""
+    by_id = {str(e.get("id")): e for e in await fetch_exercises(auth, 4)}
+    found = []
+    for exercise_id in exercise_ids:
+        exercise = by_id.get(str(exercise_id))
+        if exercise is None:
+            raise ValueError(f"exercise {exercise_id} not found in the strength exercise catalogue")
+        if not _is_custom_exercise(exercise):
+            raise ValueError(
+                f"exercise {exercise_id} ({exercise.get('name')}) is a built-in COROS exercise — "
+                "only custom exercises can be changed"
+            )
+        found.append(exercise)
+    return found
+
+
+async def create_custom_exercise(
+    auth: StoredAuth,
+    name: str,
+    part: list[str | int] | str | int,
+    muscle: list[str | int] | str | int | None = None,
+    equipment: list[str | int] | str | int | None = None,
+    muscle_relevance: list[str | int] | str | int | None = None,
+    target_type: int = 3,
+    target_value: int = 15,
+    rest_seconds: int = 30,
+    description: str = "",
+) -> dict:
+    """
+    Create a custom strength exercise.
+
+    part / muscle / muscle_relevance / equipment: labels or codes from
+    EXERCISE_PARTS / EXERCISE_MUSCLES / EXERCISE_EQUIPMENT.
+    target_type: 2=time (seconds), 3=reps. target_value / rest_seconds are
+    the defaults the Training Hub pre-fills when the exercise is added to a
+    workout. description: free text, stored in overview.
+
+    Returns the new exercise object (including its id).
+    """
+    payload = _build_custom_exercise_payload(
+        name, part, muscle, equipment, muscle_relevance, target_type, target_value, rest_seconds, description
+    )
+    async with httpx.AsyncClient(timeout=30) as client:
+        resp = await client.post(
+            _base_url(auth.region) + ENDPOINTS["exercise_add"],
+            json=payload,
+            headers=_auth_headers(auth),
+        )
+        resp.raise_for_status()
+        body = resp.json()
+
+    _check_response(body, "exercise create")
+    _reset_strength_catalog_cache()
+
+    data = body.get("data")
+    return data if isinstance(data, dict) else payload
+
+
+async def update_custom_exercise(
+    auth: StoredAuth,
+    exercise_id: str,
+    **changes,
+) -> dict:
+    """
+    Update a custom strength exercise. Fetches the current object, applies
+    `changes` (keyword arguments of _apply_custom_exercise_changes; None =
+    unchanged) and posts the full object. Raises ValueError for unknown ids
+    and built-in exercises.
+
+    Returns the updated exercise object (as sent, plus the userId the
+    request omits).
+    """
+    (current,) = await _fetch_custom_exercises_by_id(auth, [exercise_id])
+    payload = _apply_custom_exercise_changes(current, **changes)
+
+    async with httpx.AsyncClient(timeout=30) as client:
+        resp = await client.post(
+            _base_url(auth.region) + ENDPOINTS["exercise_update"],
+            json=payload,
+            headers=_auth_headers(auth),
+        )
+        resp.raise_for_status()
+        body = resp.json()
+
+    _check_response(body, "exercise update")
+    _reset_strength_catalog_cache()
+    return {**payload, "userId": current.get("userId")}
+
+
+async def delete_custom_exercises(auth: StoredAuth, exercise_ids: list[str]) -> list[dict]:
+    """
+    Delete custom strength exercises by id. Every id is checked first;
+    nothing is deleted if any is unknown or a built-in exercise.
+
+    Returns the deleted exercise objects.
+    """
+    if not exercise_ids:
+        raise ValueError("exercise_ids must not be empty")
+    exercises = await _fetch_custom_exercises_by_id(auth, exercise_ids)
+
+    async with httpx.AsyncClient(timeout=30) as client:
+        resp = await client.post(
+            _base_url(auth.region) + ENDPOINTS["exercise_delete"],
+            params={"userId": auth.user_id},
+            json=[str(e["id"]) for e in exercises],
+            headers=_auth_headers(auth),
+        )
+        resp.raise_for_status()
+        body = resp.json()
+
+    _check_response(body, "exercise delete")
+    _reset_strength_catalog_cache()
+    return exercises
 
 
 # ---------------------------------------------------------------------------

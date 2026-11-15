@@ -31,6 +31,7 @@ Ask your AI assistant questions like:
 - "What's on my training calendar next week?"
 - "Schedule my VO2 workout for Thursday"
 - "Create a 20-minute strength circuit with squats, lunges, and planks"
+- "Add 'Seated DB Shoulder Press' as a custom exercise and put it in Thursday's workout"
 
 ## Features
 
@@ -53,6 +54,9 @@ Ask your AI assistant questions like:
 | `schedule_workout_template` | Schedule an existing library template on a calendar day |
 | `remove_scheduled_workout` | Remove a scheduled workout from the calendar |
 | `list_exercises` | Browse the Coros exercise catalogue, especially for strength workouts |
+| `create_custom_exercise` | Create a custom strength exercise (name, body part, muscles, equipment) |
+| `update_custom_exercise` | Change fields of a custom strength exercise |
+| `delete_custom_exercise` | Delete custom strength exercises |
 | `sync_coros_data` | Backfill all data into the local SQLite cache for a date range |
 | `get_cache_status` | Show coverage (record counts and date ranges) of the local cache |
 
@@ -168,7 +172,7 @@ COROS_MCP_HIDE_AUTH_TOOLS=1      # hide authenticate_* (credentials never enter 
   `list_workout_templates`, `list_training_plans`, `list_planned_activities`,
   `list_exercises`, `sync_coros_data`, `get_cache_status`. A smaller tool
   list also improves tool-calling reliability of non-frontier models.
-  Default: `full` (all 26 tools).
+  Default: `full` (all 29 tools).
 - `COROS_MCP_HIDE_AUTH_TOOLS=1` removes the two `authenticate_*` tools so
   your password can never travel through the model context or agent logs.
   Authentication then happens exclusively via the `COROS_EMAIL` /
@@ -357,7 +361,7 @@ Returns: `workout_id`, `name`, `total_minutes`, `distance_meters_total`, `steps_
 
 ### `save_strength_workout_template`
 
-Save a reusable strength workout **template** to the Coros library. Exercises must come from the Coros exercise catalogue.
+Save a reusable strength workout **template** to the Coros library. Exercises must come from the Coros exercise catalogue — built-in or [custom](#create_custom_exercise).
 
 > ⚠️ This persists to the library indefinitely. For a one-off workout for a specific date, use [`schedule_strength_workout`](#schedule_strength_workout) instead — it builds the workout inline and leaves no library entry.
 
@@ -389,6 +393,8 @@ Save a reusable strength workout **template** to the Coros library. Exercises mu
 ```
 
 `target_type`: `2` = time in seconds, `3` = reps
+
+`name` / `overview` (optional): T-code and `sid_` key for built-ins; display name and description (`""` if none) for custom exercises. Omit them to take the values from the catalogue entry.
 
 `sets` (per exercise, optional): consecutive sets of that exercise before moving on. Use this instead of duplicating the exercise entry. Defaults to 1.
 
@@ -499,10 +505,65 @@ Returns: `removed`, `plan_id`, `id_in_plan`
 List the Coros exercise catalogue for a sport type. Default `sport_type=4` returns strength exercises.
 
 ```json
-{ "sport_type": 4 }
+{ "sport_type": 4, "custom_only": false }
 ```
 
+`custom_only: true` returns only your own custom exercises (non-zero `userId`) — the full strength catalogue has several hundred entries.
+
 Returns: `exercises` (list), `count`, `sport_type`
+
+### `create_custom_exercise`
+
+Create a custom strength exercise in your COROS exercise library, for exercises the built-in catalogue doesn't have.
+
+```json
+{
+  "name": "Seated DB Shoulder Press",
+  "part": ["Shoulders"],
+  "muscle": ["Deltoids"],
+  "equipment": ["Dumbbells"],
+  "target_type": "reps",
+  "target_value": 12,
+  "rest_seconds": 60,
+  "description": "Back against the pad, lower to ear height."
+}
+```
+
+`part` is required; a `Whole Body` exercise also needs `muscle`. `muscle_relevance` (secondary muscles) is optional. `target_type` (`reps` / `time`), `target_value` and `rest_seconds` are the defaults used when the exercise is added to a workout (defaults: reps, 15, 30). `description` is optional free text, shown in Training Hub.
+
+`part`, `muscle`, `muscle_relevance` and `equipment` take lists of labels (case-insensitive) or codes:
+
+| Field | Codes |
+|-------|-------|
+| `part` | 0 Whole Body, 1 Shoulders, 2 Chest, 3 Back, 4 Core, 5 Legs/Hips, 6 Arms |
+| `muscle`, `muscle_relevance` | 1 Deltoids, 2 Chest, 3 Biceps, 4 Triceps, 5 Forearms, 6 Abs, 7 Quadriceps, 8 Posterior Thigh, 9 Adductor, 10 Abductor, 11 Trapezius, 12 Latissimus Dorsi, 13 Erector Spinae, 14 Glutes, 15 Calves |
+| `equipment` | 1 Bodyweight, 2 Dumbbells, 3 Barbells, 4 Barbell Plates, 5 Ropes, 6 Gym Equipment, 7 Exercise Ball, 8 Bosu Ball, 9 Bands, 10 Medicine Ball, 11 Kettlebell, 12 Hangboard, 13 Indoor Rower, 16 Others |
+
+The mapping comes from the Training Hub's own dictionary — see [docs/custom-exercise-api.md](docs/custom-exercise-api.md).
+
+Returns: `created`, `exercise` (summary with `exercise_id`, `description` and labels), `workout_exercise`, `message`. `workout_exercise` is ready to drop into the `exercises` list of [`schedule_strength_workout`](#schedule_strength_workout) or [`save_strength_workout_template`](#save_strength_workout_template) (add `sets` / `weight_kg` as needed).
+
+### `update_custom_exercise`
+
+Change fields of a custom exercise. Only the fields you pass change; a list field replaces the whole list. Built-in exercises are refused.
+
+```json
+{ "exercise_id": "<exercise id>", "name": "Seated Dumbbell Shoulder Press", "equipment": ["Dumbbells"] }
+```
+
+Takes the same fields as `create_custom_exercise`; `"description": ""` clears the description. Workouts already saved or scheduled keep their own copy of the exercise.
+
+Returns: `updated`, `exercise`, `workout_exercise`
+
+### `delete_custom_exercise`
+
+Permanently delete custom exercises. All ids are checked first: if any is unknown or a built-in exercise, nothing is deleted. The tool description tells the assistant to confirm with you before calling it.
+
+```json
+{ "exercise_ids": ["<exercise id>"] }
+```
+
+Returns: `deleted`, `exercises` (`exercise_id` + `name` of each deleted exercise)
 
 ### `sync_coros_data`
 
@@ -553,7 +614,8 @@ coros-mcp/
 ├── tests/             # pytest test suite
 ├── pyproject.toml     # Project metadata & dependencies
 └── docs/
-    └── mobile-token.md  # Mobile API token background (legacy reference)
+    ├── mobile-token.md         # Mobile API token background (legacy reference)
+    └── custom-exercise-api.md  # Custom strength exercise endpoints + category codes
 ```
 
 ## Dependencies

@@ -22,6 +22,9 @@ WRITE_TOOLS = {
     "add_planned_workout",
     "update_scheduled_workout",
     "remove_scheduled_workout",
+    "create_custom_exercise",
+    "update_custom_exercise",
+    "delete_custom_exercise",
 }
 ADVANCED_TOOLS = {
     "list_training_plans_raw",
