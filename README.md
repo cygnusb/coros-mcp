@@ -304,7 +304,21 @@ List reusable workout templates saved in the Coros library.
 
 Returns: `workouts` (list), `count`
 
-Each entry includes: `id`, `name`, `sport_type`, `sport_name`, `estimated_time_seconds`, `exercise_count`, `exercises` (list of steps with `name`, `intensity_low`, `intensity_high`, `sets`, and exactly one duration key: `duration_seconds`, `distance_meters`, or `duration_open`)
+Every entry includes: `id`, `name`, `sport_type`, `sport_name`, `estimated_time_seconds`, `exercise_count`, `exercises`.
+
+The shape of `exercises` depends on the namespace — endurance and strength templates speak different step vocabularies:
+
+| | Endurance (run/bike) | Strength (`sport_type` 4) |
+|---|---|---|
+| Always | `name`, `sets` | `name`, `sets`, `origin_id`, `overview`, `rest_seconds` |
+| Target | exactly one of `duration_seconds`, `distance_meters`, `duration_open` | one of `reps` or `duration_seconds` (e.g. a plank) |
+| Load | `intensity_low`, `intensity_high` | one of `weight_kg`, `weight_lbs`, `bodyweight`, or `effort_target` (the app's 1–10 RPE scale, used instead of a weight) |
+
+Strength entries also carry program-level `sets` (circuit rounds) and `total_duration_seconds`.
+
+The load and structural keys (`origin_id`, `overview`, `sets`, `rest_seconds`, `weight_kg`, `weight_lbs`) are deliberately the same names [`save_strength_workout_template`](#save_strength_workout_template) takes as *input*. The **target** keys are not yet: that tool takes `target_type`/`target_value` where this returns `reps`/`duration_seconds`, and it has no input for `bodyweight` or `effort_target`. Reading a template, editing it and writing it back therefore still needs a manual mapping (`reps` → `target_type=3`); teaching the write tools these names is tracked separately.
+
+Anything unrecognized is reported raw rather than guessed at: `target_type_raw`/`target_value_raw` for an unknown `targetType`, `rest_type_raw`/`rest_value_raw` for an unknown rest encoding, and `intensity_value_raw`/`intensity_display_unit_raw` for an unknown weight unit. `effort_target` is read-only — the write side has no input for it at all.
 
 ### `save_workout_template`
 
