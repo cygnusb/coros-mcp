@@ -310,6 +310,8 @@ Each entry includes: `id`, `name`, `sport_type`, `sport_name`, `estimated_time_s
 
 Save a reusable cycling/intervals workout **template** to the Coros library. The template appears in the Coros app and can be synced to the watch. Steps can be plain steps or repeat groups for intervals.
 
+An optional `overview` sets the workout's own description, the text the Coros app shows for the workout (multi-line, newlines kept). It is the program-level field, not a step's `overview`.
+
 > ⚠️ This persists to the library indefinitely. For a one-off workout for a specific date, use [`schedule_workout`](#schedule_workout) instead — it builds the workout inline and leaves no library entry.
 
 **Plain steps:**
@@ -358,6 +360,8 @@ Returns: `workout_id`, `name`, `total_minutes`, `distance_meters_total`, `steps_
 ### `save_strength_workout_template`
 
 Save a reusable strength workout **template** to the Coros library. Exercises must come from the Coros exercise catalogue.
+
+An optional `overview` sets the workout's own description, the text the Coros app shows for the workout (multi-line, newlines kept). It is separate from each exercise's `overview` (the catalogue `sid_` key).
 
 > ⚠️ This persists to the library indefinitely. For a one-off workout for a specific date, use [`schedule_strength_workout`](#schedule_strength_workout) instead — it builds the workout inline and leaves no library entry.
 
