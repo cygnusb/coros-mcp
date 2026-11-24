@@ -888,6 +888,7 @@ async def save_workout_template(
     steps: list[dict],
     sport_type: int = 2,
     intensity_type: int | None = None,
+    overview: str = "",
 ) -> dict:
     """
     Save a REUSABLE cycling/intervals/running workout TEMPLATE to the Coros library.
@@ -973,6 +974,10 @@ async def save_workout_template(
         Intensity type ID. Defaults per sport when omitted: runs → 2 (HR),
         cycling → 6 (power in watts).
         Other IntensityType values: 1=weight, 2=HR, 3=pace, 4=speed, 5=none, 6=power, 7=cadence
+    overview : str, optional
+        The workout's own description: the program-level overview the COROS
+        app shows for the workout, multi-line text with newlines kept. Not the
+        per-exercise `overview` (sid_ key). Omit to leave it empty.
 
     Returns
     -------
@@ -988,7 +993,7 @@ async def save_workout_template(
     try:
         workout_id = await _run_with_auth(
             coros_api.save_workout_template, auth, name, steps, sport_type, intensity_type,
-            retry_all=False,
+            overview, retry_all=False,
         )
         total_minutes, distance_meters_total, steps_count = _summarize_steps(steps)
         result = {
@@ -1206,6 +1211,7 @@ async def schedule_workout(
     sport_type: int = 2,
     intensity_type: int | None = None,
     sort_no: int = 1,
+    overview: str = "",
 ) -> dict:
     """
     Schedule a ONE-OFF cycling/intervals/running workout for a specific date.
@@ -1241,6 +1247,10 @@ async def schedule_workout(
         cycling → 6 (power in watts).
     sort_no : int
         Order within the day (default 1).
+    overview : str, optional
+        The workout's own description: the program-level overview the COROS
+        app shows for the workout, multi-line text with newlines kept. Not the
+        per-exercise `overview` (sid_ key). Omit to leave it empty.
 
     Returns
     -------
@@ -1271,6 +1281,7 @@ async def schedule_workout(
             sport_type,
             intensity_type,
             sort_no,
+            overview,
             retry_all=False,
         )
         total_minutes, distance_meters_total, steps_count = _summarize_steps(steps)
@@ -1392,6 +1403,7 @@ async def schedule_strength_workout(
     happen_day: _Day,
     sets: int = 1,
     sort_no: int = 1,
+    overview: str = "",
 ) -> dict:
     """
     Schedule a ONE-OFF strength workout for a specific date.
@@ -1423,6 +1435,10 @@ async def schedule_strength_workout(
         Number of full-circuit repetitions (default 1).
     sort_no : int
         Order within the day (default 1).
+    overview : str, optional
+        The workout's own description: the program-level overview the COROS
+        app shows for the workout, multi-line text with newlines kept. Not the
+        per-exercise `overview` (sid_ key) that each entry in `exercises` carries. Omit to leave it empty.
 
     Returns
     -------
@@ -1449,6 +1465,7 @@ async def schedule_strength_workout(
             happen_day,
             sets,
             sort_no,
+            overview,
             retry_all=False,
         )
         return _attach_enrichment_warning(
@@ -1513,6 +1530,7 @@ async def save_strength_workout_template(
     name: str,
     exercises: list[dict],
     sets: int = 1,
+    overview: str = "",
 ) -> dict:
     """
     Save a REUSABLE strength workout TEMPLATE to the Coros library.
@@ -1564,6 +1582,10 @@ async def save_strength_workout_template(
     sets : int
         Number of full-circuit repetitions over the whole exercise list
         (default 1). Distinct from the per-exercise `sets` above.
+    overview : str, optional
+        The workout's own description: the program-level overview the COROS
+        app shows for the workout, multi-line text with newlines kept. Not the
+        per-exercise `overview` (sid_ key) that each entry in `exercises` carries. Omit to leave it empty.
 
     Returns
     -------
@@ -1575,7 +1597,7 @@ async def save_strength_workout_template(
     try:
         workout_id = await _run_with_auth(
             coros_api.save_strength_workout_template, auth, name, exercises, sets,
-            retry_all=False,
+            overview, retry_all=False,
         )
         return {
             "workout_id": workout_id,

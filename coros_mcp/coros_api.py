@@ -843,6 +843,7 @@ def _build_workout_program_payload(
     steps: list[dict],
     sport_type: int = 2,
     intensity_type: int | None = None,
+    overview: str = "",
 ) -> dict:
     """Sync builder for the cycling/intervals/running program dict.
 
@@ -865,6 +866,10 @@ def _build_workout_program_payload(
     intensity_type=None resolves per sport: runs default to HR (2), the
     natural running target; cycling/everything else defaults to power (6).
     Pass an explicit value to override.
+
+    overview: the program-level description the COROS app shows for the
+    workout (multi-line text, newlines kept). Empty leaves the payload as
+    before: cycling carries no overview key, running an empty one.
     """
     if not steps:
         raise ValueError("workout requires at least one step")
@@ -1162,6 +1167,9 @@ def _build_workout_program_payload(
             "videoUrl": "",
         })
 
+    if overview:
+        payload["overview"] = overview
+
     return payload
 
 
@@ -1171,6 +1179,7 @@ async def save_workout_template(
     steps: list[dict],
     sport_type: int = 2,
     intensity_type: int | None = None,
+    overview: str = "",
 ) -> str:
     """
     Save a reusable cycling/intervals workout template to the Coros library.
@@ -1192,7 +1201,7 @@ async def save_workout_template(
 
     Returns the new workout ID.
     """
-    payload = _build_workout_program_payload(name, steps, sport_type, intensity_type)
+    payload = _build_workout_program_payload(name, steps, sport_type, intensity_type, overview)
 
     async with httpx.AsyncClient(timeout=30) as client:
         resp = await client.post(
@@ -1478,6 +1487,7 @@ def _build_strength_program_payload(
     exercises: list[dict],
     by_id: dict,
     sets: int = 1,
+    overview: str = "",
 ) -> dict:
     """Sync builder for the strength program dict — the JSON body that
     /training/program/add accepts and that schedule/update accepts inline.
@@ -1485,6 +1495,9 @@ def _build_strength_program_payload(
     by_id is the catalog lookup ({id: catalog_entry}) used to populate per-
     exercise muscle/part/equipment metadata and animationId (video guidance).
     Pass {} to skip catalog enrichment.
+
+    overview: the program-level description the COROS app shows for the
+    workout (multi-line text, newlines kept); not the per-exercise sid_ key.
 
     Validation (raises ValueError):
       - empty exercises
@@ -1618,7 +1631,7 @@ def _build_strength_program_payload(
         "gradeSystemVersion": 0,
         "hybridTotalSets": 0,
         "name": name,
-        "overview": "",
+        "overview": overview,
         # pool* fields are pool-swim metadata, irrelevant for strength
         # (sportType=4). The Coros app sets them to 0 on strength workouts.
         "poolLength": 0,
@@ -1643,6 +1656,7 @@ async def save_strength_workout_template(
     name: str,
     exercises: list[dict],
     sets: int = 1,
+    overview: str = "",
 ) -> str:
     """
     Save a reusable strength workout template to the Coros library.
@@ -1667,7 +1681,7 @@ async def save_strength_workout_template(
     Returns the new workout ID.
     """
     by_id = await _load_strength_catalog(auth)
-    payload = _build_strength_program_payload(name, exercises, by_id, sets)
+    payload = _build_strength_program_payload(name, exercises, by_id, sets, overview)
 
     async with httpx.AsyncClient(timeout=30) as client:
         resp = await client.post(
@@ -1814,6 +1828,7 @@ async def schedule_workout(
     sport_type: int = 2,
     intensity_type: int | None = None,
     sort_no: int = 1,
+    overview: str = "",
 ) -> dict:
     """
     Build + schedule a one-off cycling/intervals workout for happen_day.
@@ -1824,7 +1839,7 @@ async def schedule_workout(
 
     Returns the server response 'data' dict (shape depends on Coros API).
     """
-    program = _build_workout_program_payload(name, steps, sport_type, intensity_type)
+    program = _build_workout_program_payload(name, steps, sport_type, intensity_type, overview)
     return await _post_schedule_inline(auth, program, happen_day, sort_no)
 
 
@@ -1835,6 +1850,7 @@ async def schedule_strength_workout(
     happen_day: str,
     sets: int = 1,
     sort_no: int = 1,
+    overview: str = "",
 ) -> dict:
     """
     Build + schedule a one-off strength workout for happen_day. Does NOT
@@ -1846,7 +1862,7 @@ async def schedule_strength_workout(
     Returns the server response 'data' dict (shape depends on Coros API).
     """
     by_id = await _load_strength_catalog(auth)
-    program = _build_strength_program_payload(name, exercises, by_id, sets)
+    program = _build_strength_program_payload(name, exercises, by_id, sets, overview)
     return await _post_schedule_inline(auth, program, happen_day, sort_no)
 
 
